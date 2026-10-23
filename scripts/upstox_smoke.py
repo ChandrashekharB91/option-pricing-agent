@@ -133,6 +133,8 @@ def main() -> int:
         F = statistics.median(fwds)
         print(f"Parity forward {F:,.2f}  (median of {len(fwds)} strikes, range {min(fwds):,.2f} to {max(fwds):,.2f}, "
               f"r = {args.rate:.2%} placeholder)")
+        naive = chain.spot * math.exp(args.rate * T)
+        print(f"Spot x carry   {naive:,.2f}  ({(naive - F) / F:+.3%} vs parity: why pricing uses the parity forward)")
         same = [f for f in futures if f.expiry == chain.expiry]
         if same:
             fut_px = same[0].mid if not math.isnan(same[0].mid) else same[0].last

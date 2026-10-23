@@ -274,6 +274,9 @@ def _option_quote(side: dict, expiry: date, strike: float, option_type: str) -> 
         return None
     md = side.get("market_data") or {}
     greeks = side.get("option_greeks") or {}
+    # Upstox reports iv = 0 (with delta = +/-1) where its own solver failed, mostly deep ITM;
+    # treat those as missing rather than as a real zero vol.
+    vendor_ok = (greeks.get("iv") or 0) > 0
     return OptionQuote(
         instrument_key=side["instrument_key"],
         expiry=expiry,
@@ -288,8 +291,8 @@ def _option_quote(side: dict, expiry: date, strike: float, option_type: str) -> 
         volume=int(md.get("volume") or 0),
         oi=float(md.get("oi") or 0.0),
         prev_oi=float(md.get("prev_oi") or 0.0),
-        vendor_iv=_num(greeks.get("iv")),
-        vendor_delta=_num(greeks.get("delta")),
+        vendor_iv=_num(greeks.get("iv")) if vendor_ok else math.nan,
+        vendor_delta=_num(greeks.get("delta")) if vendor_ok else math.nan,
     )
 
 
