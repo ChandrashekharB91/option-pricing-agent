@@ -12,7 +12,9 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | Upstox market data adapter (chain, spot, futures, expiries) | Done, validated on a live NIFTY snapshot |
 | FBIL MIBOR-OIS discount curve | Done, reprices FBIL inputs exactly |
 | Parity forwards, futures check, chain QA, vol slice | Done, validated on a live NIFTY snapshot |
-| SVI surface, validator, API, agent, dashboard | Next |
+| SVI smile fit, vol surface, calendar checks | Done; on live data RMSE 0.21 vol pts |
+| `price_option` and validator checks | Done; QuantLib-exact, withholds market-inconsistent prices |
+| API, orchestrator and validator agents, dashboard | Next |
 | SVI surface, validator, API, agent, dashboard | Planned (phase 1) |
 
 ## Walkthrough notebook
@@ -100,6 +102,33 @@ s.atm_vol(), s.to_records()                                 # bid/mid/ask vols f
 - **QA:** named drop rules (missing/crossed quotes, ITM side, below intrinsic, price < ₹0.50, wide
   spread, far moneyness), a no-volume flag, and static-arbitrage checks with a one-tick tolerance;
   arbitrage up to 0.5 points warns (too small to trade after costs), larger fails.
+
+## Surface, pricing and validation
+
+```python
+from optlib.surface import build_surface
+from optlib.pricing import price_option
+from optlib.validator import validate
+
+surf = build_surface(src, curve, "NIFTY", max_expiries=4)   # QA + SVI per expiry, calendar checks
+print(surf.summary())
+
+res = price_option(surf, 22500, expiries[0], "call", quantity=65)   # one lot
+res.price, res.vol, res.vol_source, res.position_greeks()
+report = validate(res, surf)
+print(report.summary())          # PASS / WARN / FAIL per check; FAIL withholds the result
+```
+
+- **SVI** (raw, quasi-explicit fit): residuals in bid-ask spreads, positive variance, Roger Lee wing bounds,
+  Gatheral's g(k) butterfly check. Raw SVI cannot follow a four-day NIFTY smile to within its 0.01-0.03 vol-pt
+  bands (0.2 pts low at the money on 23 Oct 2026), so vanilla pricing uses **layers**: listed strikes at their
+  market vol, in-between strikes at SVI corrected to their neighbours, SVI wings beyond the quotes. Across
+  expiries and for exotics, pure SVI with total variance interpolated linearly in time.
+- **Validator**: chain QA, forward vs future, curve age, SVI fit, smile convexity, SVI-vs-market gap, vol source,
+  wing price vs nearer listed offers, calendar arbitrage, independent reprice, put-call parity, price bounds,
+  Greek signs, QuantLib `BlackCalculator` at the exact time to expiry, analytic vs bumped Greeks.
+- **Known limitation**: far out-of-the-money wings (beyond the last strike QA keeps, about 3,500 points out on
+  23 Oct) are extrapolated a few paise above the market's tick-floor offers; the validator withholds these.
 
 Supported underlyings: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50. Missing or zero bids/asks
 become NaN. Upstox's own IV and delta are kept as `vendor_iv` / `vendor_delta` for comparison only.

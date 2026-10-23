@@ -3,6 +3,7 @@
     python scripts/upstox_smoke.py                 # NIFTY, nearest expiry
     python scripts/upstox_smoke.py --underlying BANKNIFTY --expiry 2026-11-23
     python scripts/upstox_smoke.py --save          # also write a snapshot to data/snapshots/
+    python scripts/upstox_smoke.py --surface 4 --save   # next 4 expiries: SVI per expiry + surface checks
 
 What it runs:
   1. Upstox: token check, expiries, index spot, futures, full option chain.
@@ -32,6 +33,7 @@ from optlib.data.env import mask  # noqa: E402
 from optlib.data.fbil import FBILClient  # noqa: E402
 from optlib.data.upstox import TOKEN_ENV_VAR  # noqa: E402
 from optlib.slices import build_vol_slice  # noqa: E402
+from optlib.surface import build_surface  # noqa: E402
 
 
 class RecordingSession:
@@ -76,6 +78,8 @@ def main(argv=None, fbil: FBILClient | None = None) -> int:
     ap.add_argument("--rate", type=float, default=0.06, help="fallback flat rate if FBIL is unreachable")
     ap.add_argument("--strikes", type=int, default=6, help="strikes each side of ATM in the smile table")
     ap.add_argument("--save", action="store_true", help="write the raw responses to data/snapshots/")
+    ap.add_argument("--surface", type=int, default=0, metavar="N",
+                    help="also fetch the next N expiries, fit SVI to each and check the surface")
     args = ap.parse_args(argv)
 
     session = RecordingSession()
@@ -166,17 +170,33 @@ def main(argv=None, fbil: FBILClient | None = None) -> int:
     if diffs:
         print(f"Mean optlib - Upstox: {statistics.mean(diffs):+.2f} vol pts (Upstox uses its own forward and timing)")
 
+    surface_status = None
+    if args.surface:
+        line()
+        try:
+            surf = build_surface(src, curve, symbol, expiries=expiries[:args.surface])
+            print(surf.summary())
+            for sm in surf.smiles:
+                print(sm.summary())
+            surface_status = surf.status
+        except (UpstoxError, ValueError) as exc:
+            print(f"Surface FAIL: {exc}")
+            surface_status = "FAIL"
+
     if args.save:
         out = ROOT / "data" / "snapshots"
         out.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(IST).strftime("%Y%m%dT%H%M%S")
-        path = out / f"upstox_{symbol}_{chain.expiry.isoformat()}_{stamp}.json"
+        tag = f"{args.surface}exp" if args.surface else chain.expiry.isoformat()
+        path = out / f"upstox_{symbol}_{tag}_{stamp}.json"
         path.write_text(json.dumps({"as_of": chain.as_of.isoformat(), "underlying": symbol,
                                     "expiry": chain.expiry.isoformat(), "responses": session.records},
                                    indent=1, default=str), encoding="utf-8")
         print(f"Saved raw responses (no token) to {path.relative_to(ROOT)}")
 
     statuses = [s.qa.status] + ([s.forward_check.verdict] if s.forward_check else [])
+    if surface_status:
+        statuses.append(surface_status)
     result = "FAIL" if "FAIL" in statuses else ("WARN" if "WARN" in statuses else "PASS")
     line("=")
     print(f"RESULT: {result}")
