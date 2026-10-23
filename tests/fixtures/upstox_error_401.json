@@ -1,0 +1,11 @@
+{
+ "status": "error",
+ "errors": [
+  {
+   "error_code": "UDAPI100050",
+   "message": "Invalid token used to access API",
+   "property_path": null,
+   "invalid_value": null
+  }
+ ]
+}

@@ -1,0 +1,11 @@
+{
+ "status": "error",
+ "errors": [
+  {
+   "error_code": "UDAPI100036",
+   "message": "Invalid Input",
+   "property_path": "expiry_date",
+   "invalid_value": "2026-13-01"
+  }
+ ]
+}

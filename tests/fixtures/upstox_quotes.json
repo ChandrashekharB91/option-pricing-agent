@@ -1,0 +1,71 @@
+{
+ "status": "success",
+ "data": {
+  "NSE_INDEX:Nifty 50": {
+   "ohlc": {
+    "open": 25650.1,
+    "high": 25748.9,
+    "low": 25611.0,
+    "close": 25640.55
+   },
+   "depth": {
+    "buy": [],
+    "sell": []
+   },
+   "timestamp": "2026-10-23T11:00:00.125+05:30",
+   "instrument_token": "NSE_INDEX|Nifty 50",
+   "symbol": "NIFTY",
+   "last_price": 25712.35,
+   "volume": 0,
+   "average_price": 0.0,
+   "oi": 0,
+   "net_change": 71.8,
+   "total_buy_quantity": 0,
+   "total_sell_quantity": 0,
+   "lower_circuit_limit": 0,
+   "upper_circuit_limit": 0,
+   "last_trade_time": "1792738800125",
+   "oi_day_high": 0,
+   "oi_day_low": 0
+  },
+  "NSE_FO:NIFTY26OCTFUT": {
+   "ohlc": {
+    "open": 25700.0,
+    "high": 25790.0,
+    "low": 25660.0,
+    "close": 25689.9
+   },
+   "depth": {
+    "buy": [
+     {
+      "quantity": 650,
+      "price": 25745.1,
+      "orders": 4
+     }
+    ],
+    "sell": [
+     {
+      "quantity": 325,
+      "price": 25746.5,
+      "orders": 2
+     }
+    ]
+   },
+   "timestamp": "2026-10-23T11:00:00.311+05:30",
+   "instrument_token": "NSE_FO|48704",
+   "symbol": "NIFTY26OCTFUT",
+   "last_price": 25745.8,
+   "volume": 1834500,
+   "average_price": 25721.4,
+   "oi": 14250000.0,
+   "net_change": 55.9,
+   "total_buy_quantity": 410000,
+   "total_sell_quantity": 398000,
+   "lower_circuit_limit": 23120.9,
+   "upper_circuit_limit": 28258.8,
+   "last_trade_time": "1792738800311",
+   "oi_day_high": 14400000,
+   "oi_day_low": 14100000
+  }
+ }
+}
