@@ -9,8 +9,10 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | --- | --- |
 | Black-76 and BSM pricer, analytic Greeks | Done, matches QuantLib |
 | Implied volatility solver | Done, matches QuantLib |
-| Upstox market data adapter (chain, spot, futures, expiries) | Done, tested on recorded-format fixtures |
-| MIBOR-OIS curve, parity forwards, chain QA, NSE bhavcopy | Next |
+| Upstox market data adapter (chain, spot, futures, expiries) | Done, validated on a live NIFTY snapshot |
+| FBIL MIBOR-OIS discount curve | Done, reprices FBIL inputs exactly |
+| Parity forwards, futures check, chain QA, vol slice | Done, validated on a live NIFTY snapshot |
+| SVI surface, validator, API, agent, dashboard | Next |
 | SVI surface, validator, API, agent, dashboard | Planned (phase 1) |
 
 ## Install
@@ -61,6 +63,32 @@ chain.spot, chain.time_to_expiry(), chain.quote(25700, "call").mid
 rows = chain.to_records()                   # flat rows for pandas or Snowflake
 futures = src.futures("NIFTY")
 ```
+
+## From chain to smile
+
+```python
+from optlib.curves import bootstrap_mibor_ois
+from optlib.data.fbil import FBILClient
+from optlib.slices import build_vol_slice
+
+quotes = FBILClient().ois_quotes(chain.as_of.date())        # latest FBIL MIBOR-OIS fixing
+curve = bootstrap_mibor_ois(quotes, chain.as_of.date())     # rolled to today; records its age
+s = build_vol_slice(chain, curve, future_price=futures[0].mid)
+
+s.rate, s.forward.forward, s.forward_check.verdict          # curve rate, parity forward, vs future
+print(s.qa.summary())                                       # what was kept, dropped and why
+s.atm_vol(), s.to_records()                                 # bid/mid/ask vols for the SVI fit
+```
+
+- **Curve:** FBIL MIBOR-OIS (bullet up to 1Y, semi-annual beyond, Act/365, T+1 start), log-linear
+  discount factors. FBIL's public endpoint lags by several business days; the curve records its age and
+  QA warns past 10 days. Same-day rates can be passed as `OISQuotes` directly.
+- **Forward:** spread-weighted median of per-strike put-call parity forwards near the money, checked
+  against the same-expiry future (warn 0.05%, fail 0.20%). Spot x carry is not used: it misses the
+  futures basis (0.17% on 23 Oct 2026, enough to split ATM call and put vols by 3.7 points).
+- **QA:** named drop rules (missing/crossed quotes, ITM side, below intrinsic, price < ₹0.50, wide
+  spread, far moneyness), a no-volume flag, and static-arbitrage checks with a one-tick tolerance;
+  arbitrage up to 0.5 points warns (too small to trade after costs), larger fails.
 
 Supported underlyings: NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50. Missing or zero bids/asks
 become NaN. Upstox's own IV and delta are kept as `vendor_iv` / `vendor_delta` for comparison only.
