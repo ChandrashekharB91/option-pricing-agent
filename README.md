@@ -15,6 +15,17 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | SVI surface, validator, API, agent, dashboard | Next |
 | SVI surface, validator, API, agent, dashboard | Planned (phase 1) |
 
+## Walkthrough notebook
+
+`notebooks/01_pipeline_walkthrough.ipynb` follows one NIFTY chain through every step built so far (market data,
+curve, forward, QA, smile, Greeks, QuantLib check) with charts and plain-language notes. It replays the live
+23 Oct 2026 snapshot by default, so it runs offline; set `LIVE = True` in the first cell for fresh data.
+
+```bash
+pip install -e ".[notebook]"
+jupyter lab notebooks/01_pipeline_walkthrough.ipynb
+```
+
 ## Install
 
 ```bash
