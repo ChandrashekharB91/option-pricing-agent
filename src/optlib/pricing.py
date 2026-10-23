@@ -50,13 +50,19 @@ class PricingResult:
 
 
 def price_option(surface: VolSurface, strike: float, expiry: date, option_type: str,
-                 quantity: float = 1.0) -> PricingResult:
+                 quantity: float = 1.0, allow_extrapolation: bool = False) -> PricingResult:
+    """Price one option off the surface. Expiries after the last fitted expiry are refused unless
+    ``allow_extrapolation``: holding a short-dated smile flat out to a later expiry is not a price."""
     option_type = option_type.lower()
     if option_type not in ("call", "put"):
         raise ValueError("option_type must be 'call' or 'put'")
     T = surface.time_to(nse_expiry_instant(expiry))
     if T <= 0:
         raise ValueError(f"{expiry} has expired")
+    last = surface.smiles[-1]
+    if T > last.time_to_expiry + 1e-9 and not allow_extrapolation:
+        raise ValueError(f"{expiry} is beyond the last fitted expiry ({last.slice.expiry}); "
+                         "build the surface with more expiries")
     smile = next((s for s in surface.smiles if s.expiry == expiry), None)
     if smile is not None:
         F, r = smile.forward, smile.slice.rate

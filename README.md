@@ -14,7 +14,44 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | Parity forwards, futures check, chain QA, vol slice | Done, validated on a live NIFTY snapshot |
 | SVI smile fit, vol surface, calendar checks | Done; on live data RMSE 0.21 vol pts |
 | `price_option` and validator checks | Done; QuantLib-exact, withholds market-inconsistent prices |
-| API, orchestrator and validator agents, dashboard | Next |
+| FastAPI backend, Python client | Done |
+| Orchestrator and validator agents (Claude tool use) | Done; tested with a scripted model, needs an API key to run live |
+| Streamlit dashboard: market & smile, pricer, book risk, agent chat | Done |
+
+## Run the app (local)
+
+```powershell
+pip install -e ".[app]"
+copy .env.example .env          # then fill in ANTHROPIC_API_KEY (and UPSTOX_ANALYTICS_TOKEN for live data)
+
+# terminal 1: the API (docs at http://127.0.0.1:8000/docs)
+uvicorn optlib_app.api:app
+
+# terminal 2: the dashboard (opens http://localhost:8501)
+streamlit run src/optlib_app/dashboard.py
+```
+
+`DATA_MODE=replay` (default) serves the recorded 23 Oct 2026 NIFTY snapshot, so everything works offline and
+outside market hours. `DATA_MODE=live` uses Upstox and FBIL; surfaces are cached for 60 seconds.
+
+| Endpoint | What it returns |
+| --- | --- |
+| `GET /health` | data mode, snapshot time |
+| `GET /expiries/{underlying}` | expiries available |
+| `GET /overview/{underlying}` | spot, curve, per-expiry forward, rate, ATM vol, QA and SVI status |
+| `GET /smile/{underlying}/{expiry}` | bid/mid/ask vols by strike, SVI curve, QA drops |
+| `POST /price` | price, Greeks (per unit and position), inputs, validation report |
+| `POST /book` | per-position and total value and Greeks, worst validation status |
+| `POST /scenarios` | spot x vol P&L grid, full revaluation |
+| `POST /agent/ask` | agent answer, tool calls, independent validator review, release status |
+
+From a notebook: `from optlib_app.client import PricingClient; PricingClient().price("2026-10-27", 22500, "call", lots=2)`.
+
+**Agents.** The orchestrator (Claude, tool use) calls the pricing tools and explains results; it is instructed never
+to state a number that did not come from a tool. The validator is a separate call that sees only the question and
+the tool inputs/outputs (never the orchestrator's text) and returns PASS/WARN/FAIL. Any deterministic FAIL or
+validator FAIL withholds the answer. Models are set by `ORCHESTRATOR_MODEL` / `VALIDATOR_MODEL`
+(default `claude-sonnet-5-5`).
 | SVI surface, validator, API, agent, dashboard | Planned (phase 1) |
 
 ## Walkthrough notebook
