@@ -1,22 +1,28 @@
-"""Orchestrator and validator agents (Claude, tool use).
+"""Orchestrator and validator agents, on whichever LLM API is configured (see optlib_app.llm).
 
 Orchestrator: plans the request, calls the pricing tools, explains the result. It never computes a
 number itself; every figure in its answer must come from a tool result.
 
 Validator: a separate model call that sees only the user's question and the tool calls (inputs and
 outputs, including the deterministic validation reports). It never sees the orchestrator's reasoning
-or draft. It returns a verdict; it can raise severity but never clear a deterministic FAIL.
+or draft. It can raise severity but never clear a deterministic FAIL.
+
+Number grounding: every number in the final answer is checked against the tool results (allowing
+for rounding and percent formatting). Numbers that cannot be traced are listed and the answer is
+marked WARN. This matters most on smaller free models, which are likelier to invent figures.
 
 Release rule: any deterministic FAIL, or a validator FAIL, withholds the answer.
 """
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 
-from .config import Settings
+from .config import get_setting
+from .llm import LLMClient, LLMError, LLMNotConfigured, make_llm
 from .service import PricingService, ServiceError
 
 MAX_TURNS = 8
@@ -26,8 +32,9 @@ You price NSE index options (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50;
 using the team's in-house library through the tools provided.
 
 Rules:
-1. Every number you state (price, vol, Greek, forward, rate, P&L) must come from a tool result in this
-   conversation. Never compute, estimate, round differently or invent figures yourself.
+1. Every number you state (price, vol, Greek, forward, rate, P&L) must be copied from a tool result in this
+   conversation. Never compute, estimate, add up or invent figures yourself; if a total is needed, call a tool
+   that returns it (book_risk returns totals).
 2. If the trade is ambiguous (missing expiry, strike, call/put or size), ask one short question instead of guessing.
    Lots are signed: positive long, negative short. Quote sizes in lots and state the lot size from the tools.
 3. Use market_overview first when you need the available expiries, spot, forward or rates.
@@ -123,8 +130,10 @@ class AgentReply:
     validator_review: str
     validator_verdict: str
     deterministic_status: str
+    ungrounded_numbers: list = field(default_factory=list)
     tool_calls: list = field(default_factory=list)
     withheld_draft: Optional[str] = None
+    provider: str = ""
     model: str = ""
 
     def to_dict(self) -> dict:
@@ -146,19 +155,78 @@ def _round(x, nd=6):
     return x
 
 
-class OptionPricingAgent:
-    def __init__(self, service: PricingService, client=None, settings: Optional[Settings] = None,
-                 max_turns: int = MAX_TURNS):
-        self.service = service
-        self.settings = settings or service.settings
-        if client is None:
-            key = Settings.anthropic_api_key()
-            if not key:
-                raise AgentUnavailable("Set ANTHROPIC_API_KEY in the .env file to use the agent.")
-            import anthropic
+# ------------------------------------------------------------------ number grounding
 
-            client = anthropic.Anthropic(api_key=key)
-        self.client = client
+_NUM = re.compile(r"(?<![\w.])-?\d{1,3}(?:,\d{2,3})+(?:\.\d+)?(?![\d,])|(?<![\w.])-?\d+(?:\.\d+)?(?![\w])")
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}",
+                   re.IGNORECASE)
+
+
+def _numbers(text: str) -> list[tuple[str, float, int]]:
+    """(raw, value, decimals) for each number in text, ignoring dates and years."""
+    text = _DATE.sub(" ", text)
+    out = []
+    for m in _NUM.finditer(text):
+        raw = m.group(0)
+        clean = raw.replace(",", "")
+        try:
+            v = float(clean)
+        except ValueError:
+            continue
+        if raw.isdigit() and 1900 <= v <= 2100:
+            continue
+        out.append((raw, v, len(clean.split(".")[1]) if "." in clean else 0))
+    return out
+
+
+def _tool_numbers(records: list["ToolRecord"]) -> list[float]:
+    vals: list[float] = []
+
+    def walk(x):
+        if isinstance(x, bool) or x is None:
+            return
+        if isinstance(x, (int, float)):
+            if math.isfinite(x):
+                vals.extend((float(x), float(x) * 100))  # fractions shown as percentages
+        elif isinstance(x, str):
+            vals.extend(v for _, v, _ in _numbers(x))
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                walk(v)
+
+    for r in records:
+        walk(r.input)
+        walk(r.output)
+    return vals
+
+
+def ungrounded_numbers(answer: str, question: str, records: list["ToolRecord"]) -> list[str]:
+    """Numbers in the answer that no tool result (or the question) supports, allowing for rounding."""
+    pool = _tool_numbers(records) + [v for _, v, _ in _numbers(question)]
+    missing = []
+    for raw, v, d in _numbers(answer):
+        if d == 0 and abs(v) <= 10:  # small counts ("2 lots", "3 checks") carry no pricing information
+            continue
+        tol = 0.5 * 10 ** (-d) + 1e-9 + 1e-6 * abs(v)
+        if not any(abs(abs(v) - abs(t)) <= tol for t in pool):
+            missing.append(raw)
+    return missing
+
+
+# ------------------------------------------------------------------ agent
+
+class OptionPricingAgent:
+    def __init__(self, service: PricingService, llm: Optional[LLMClient] = None,
+                 validator_llm: Optional[LLMClient] = None, max_turns: int = MAX_TURNS):
+        self.service = service
+        try:
+            self.llm = llm or make_llm(get_setting, "orchestrator")
+            self.validator_llm = validator_llm or (make_llm(get_setting, "validator") if llm is None else llm)
+        except LLMNotConfigured as exc:
+            raise AgentUnavailable(str(exc)) from exc
         self.max_turns = max_turns
 
     # tools ----------------------------------------------------------------------------
@@ -210,41 +278,46 @@ class OptionPricingAgent:
 
     # main loop ---------------------------------------------------------------------------
     def ask(self, question: str, history: Optional[list] = None) -> AgentReply:
-        messages = [m for m in (history or []) if m.get("role") in ("user", "assistant")]
+        messages = [{"role": m["role"], "content": m["content"]} for m in (history or [])
+                    if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
         messages.append({"role": "user", "content": question})
         records: list[ToolRecord] = []
         answer = ""
-        for _ in range(self.max_turns):
-            resp = self.client.messages.create(model=self.settings.orchestrator_model, max_tokens=2048,
-                                               system=ORCHESTRATOR_PROMPT, tools=TOOLS, messages=messages)
-            messages.append({"role": "assistant", "content": resp.content})
-            texts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
-            if resp.stop_reason != "tool_use":
-                answer = "\n".join(texts).strip()
-                break
-            results = []
-            for block in resp.content:
-                if getattr(block, "type", "") != "tool_use":
-                    continue
-                try:
-                    out = _round(self._run_tool(block.name, dict(block.input)))
-                    records.append(ToolRecord(block.name, dict(block.input), out))
-                    results.append({"type": "tool_result", "tool_use_id": block.id, "content": json.dumps(out)})
-                except (ServiceError, KeyError, ValueError) as exc:
-                    records.append(ToolRecord(block.name, dict(block.input), None, str(exc)))
-                    results.append({"type": "tool_result", "tool_use_id": block.id, "content": str(exc),
-                                    "is_error": True})
-            messages.append({"role": "user", "content": results})
-        else:
-            answer = "I could not finish within the step limit; please narrow the request."
+        try:
+            for _ in range(self.max_turns):
+                reply = self.llm.chat(ORCHESTRATOR_PROMPT, messages, TOOLS)
+                messages.append({"role": "assistant", "content": reply.text, "tool_calls": reply.tool_calls})
+                if not reply.tool_calls:
+                    answer = reply.text
+                    break
+                for tc in reply.tool_calls:
+                    if tc.parse_error:
+                        out, err = None, tc.parse_error
+                    else:
+                        try:
+                            out, err = _round(self._run_tool(tc.name, dict(tc.arguments))), None
+                        except (ServiceError, KeyError, ValueError, TypeError) as exc:
+                            out, err = None, str(exc)
+                    records.append(ToolRecord(tc.name, dict(tc.arguments), out, err))
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.name,
+                                     "content": json.dumps(out) if err is None else err, "is_error": err is not None})
+            else:
+                answer = "I could not finish within the step limit; please narrow the request."
+            review, verdict = self._validate(question, records)
+        except LLMError as exc:
+            return AgentReply(question=question, answer=f"The LLM API failed: {exc}", status="FAIL", released=False,
+                              validator_review="", validator_verdict="", deterministic_status="",
+                              tool_calls=[asdict(r) for r in records], provider=self.llm.provider,
+                              model=self.llm.model)
 
         deterministic = _worst(*self._statuses(records)) if records else "PASS"
-        review, verdict = self._validate(question, records)
-        status = _worst(deterministic, verdict)
+        loose = ungrounded_numbers(answer, question, records)
+        status = _worst(deterministic, verdict, "WARN" if loose else "PASS")
         released = status != "FAIL"
         reply = AgentReply(question=question, answer=answer, status=status, released=released,
                            validator_review=review, validator_verdict=verdict, deterministic_status=deterministic,
-                           tool_calls=[asdict(r) for r in records], model=self.settings.orchestrator_model)
+                           ungrounded_numbers=loose, tool_calls=[asdict(r) for r in records],
+                           provider=self.llm.provider, model=self.llm.model)
         if not released:
             reply.withheld_draft = answer
             reasons = self._fail_reasons(records) or [f"independent validator: {review}"]
@@ -265,11 +338,9 @@ class OptionPricingAgent:
         if not records:
             return "No tool calls were made, so there is nothing to validate.", "PASS"
         payload = {"question": question, "tool_calls": [asdict(r) for r in records]}
-        resp = self.client.messages.create(
-            model=self.settings.validator_model, max_tokens=600, system=VALIDATOR_PROMPT,
-            messages=[{"role": "user", "content": json.dumps(payload, default=str)}])
-        text = "\n".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
-        m = re.search(r"VERDICT:\s*(PASS|WARN|FAIL)", text)
-        verdict = m.group(1) if m else "WARN"  # an unparseable review is not a clean pass
-        review = re.sub(r"\n?VERDICT:.*$", "", text, flags=re.S).strip()
+        reply = self.validator_llm.chat(VALIDATOR_PROMPT, [{"role": "user", "content": json.dumps(payload, default=str)}],
+                                        tools=None, max_tokens=600)
+        m = re.search(r"VERDICT:\s*\**\s*(PASS|WARN|FAIL)", reply.text, re.IGNORECASE)
+        verdict = m.group(1).upper() if m else "WARN"  # an unparseable review is not a clean pass
+        review = re.sub(r"\n?\**VERDICT:.*$", "", reply.text, flags=re.S | re.IGNORECASE).strip()
         return review, verdict

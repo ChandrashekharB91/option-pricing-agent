@@ -52,6 +52,11 @@ with st.sidebar:
         st.success(f"API connected · {h['data_mode']} data")
         st.caption(f"Market data as of {h['as_of'][:16].replace('T', ' ')} IST")
         underlyings = h["underlyings"]
+        llm = h.get("llm") or {}
+        if llm.get("configured"):
+            st.caption(f"Agent LLM: {llm['provider']} · {llm['model']}")
+        else:
+            st.caption("Agent LLM: not configured")
     except Exception as exc:  # noqa: BLE001
         st.error(f"API not reachable at {url}. Start it with `uvicorn optlib_app.api:app`.\n\n{exc}")
         st.stop()
@@ -191,6 +196,10 @@ with tab_book:
 with tab_agent:
     st.caption("Ask in plain language, e.g. *Price 2 lots of the 22,500 call and explain the Greeks*. "
                "Every number comes from the pricing tools; an independent validator reviews each answer.")
+    if not (h.get("llm") or {}).get("configured"):
+        st.info("The agent needs an LLM. In the repo's `.env` set `LLM_PROVIDER` (e.g. groq, gemini, openrouter, "
+                "ollama, anthropic), `LLM_API_KEY` and `LLM_MODEL`, restart the API, then check it with "
+                "`python scripts/check_llm.py`.\n\n" + (h.get("llm") or {}).get("message", ""))
     st.session_state.setdefault("chat", [])
     for m in st.session_state.chat:
         with st.chat_message(m["role"]):
@@ -206,7 +215,11 @@ with tab_agent:
                     history = st.session_state.chat[:-1]
                     reply = client.ask(question, history)
                     st.markdown(reply["answer"])
-                    st.markdown(f"Status {badge(reply['status'])} · validator: {reply['validator_verdict']}")
+                    st.markdown(f"Status {badge(reply['status'])} · validator: {reply['validator_verdict']} · "
+                                f"{reply.get('provider', '')} {reply.get('model', '')}")
+                    if reply.get("ungrounded_numbers"):
+                        st.warning("Numbers not found in any tool result (treat with care): "
+                                   + ", ".join(reply["ungrounded_numbers"]))
                     with st.expander("Independent validator review"):
                         st.write(reply["validator_review"])
                     with st.expander(f"Tool calls ({len(reply['tool_calls'])})"):

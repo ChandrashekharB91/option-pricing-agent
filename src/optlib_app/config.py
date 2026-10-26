@@ -2,9 +2,8 @@
 
     DATA_MODE                 replay (default: the recorded 23 Oct 2026 NIFTY snapshot) | live (Upstox + FBIL)
     UPSTOX_ANALYTICS_TOKEN    needed for live mode
-    ANTHROPIC_API_KEY         needed for the agents
-    ORCHESTRATOR_MODEL        default claude-sonnet-5-5
-    VALIDATOR_MODEL           default claude-sonnet-5-5
+    LLM_PROVIDER, LLM_API_KEY, LLM_MODEL, LLM_BASE_URL, VALIDATOR_MODEL
+                              the LLM the agents run on (see optlib_app.llm)
     PRICING_API_URL           where the dashboard finds the API (default http://127.0.0.1:8000)
     SURFACE_TTL_SECONDS       live-mode cache lifetime for surfaces (default 60)
 """
@@ -20,28 +19,38 @@ ROOT = Path(__file__).resolve().parents[2]
 FIX = ROOT / "tests" / "fixtures"
 
 
-def _get(name: str, default: str = "") -> str:
+def get_setting(name: str, default: str = "") -> str:
+    """Environment variable first, then the repo's .env, then the default."""
     value = os.environ.get(name, "").strip()
     return value or read_env_file(ROOT / ".env").get(name, "").strip() or default
 
 
+_get = get_setting  # backwards-compatible name
+
+
 @dataclass
 class Settings:
-    data_mode: str = field(default_factory=lambda: _get("DATA_MODE", "replay").lower())
+    data_mode: str = field(default_factory=lambda: get_setting("DATA_MODE", "replay").lower())
     snapshot_path: Path = FIX / "upstox_live_nifty_20261023_full.json"
     instruments_path: Path = FIX / "upstox_instruments_sample.json"
     fbil_ois_path: Path = FIX / "fbil_miborois_20261001_20261023.json"
     fbil_overnight_path: Path = FIX / "fbil_ovnmibor_20261001_20261023.json"
     cache_dir: Path = ROOT / "data" / "cache"
-    surface_ttl_seconds: float = field(default_factory=lambda: float(_get("SURFACE_TTL_SECONDS", "60")))
-    orchestrator_model: str = field(default_factory=lambda: _get("ORCHESTRATOR_MODEL", "claude-sonnet-5-5"))
-    validator_model: str = field(default_factory=lambda: _get("VALIDATOR_MODEL", "claude-sonnet-5-5"))
-    api_url: str = field(default_factory=lambda: _get("PRICING_API_URL", "http://127.0.0.1:8000"))
+    surface_ttl_seconds: float = field(default_factory=lambda: float(get_setting("SURFACE_TTL_SECONDS", "60")))
+    api_url: str = field(default_factory=lambda: get_setting("PRICING_API_URL", "http://127.0.0.1:8000"))
 
     def __post_init__(self):
         if self.data_mode not in ("replay", "live"):
             raise ValueError(f"DATA_MODE must be 'replay' or 'live', got {self.data_mode!r}")
 
-    @staticmethod
-    def anthropic_api_key() -> str:
-        return _get("ANTHROPIC_API_KEY")
+
+def llm_status() -> dict:
+    """What the agents will run on, without exposing the key."""
+    from .llm import LLMNotConfigured, make_llm
+
+    try:
+        llm = make_llm(get_setting)
+        return {"configured": True, "provider": llm.provider, "model": llm.model, "message": ""}
+    except LLMNotConfigured as exc:
+        return {"configured": False, "provider": get_setting("LLM_PROVIDER", "") or None, "model": None,
+                "message": str(exc)}

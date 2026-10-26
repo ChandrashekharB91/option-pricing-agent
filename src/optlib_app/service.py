@@ -167,8 +167,10 @@ class PricingService:
 
     # views ----------------------------------------------------------------------
     def health(self) -> dict:
+        from .config import llm_status
+
         return {"status": "ok", "data_mode": self.mode, "as_of": self.now().isoformat(),
-                "underlyings": list(UNDERLYINGS)}
+                "underlyings": list(UNDERLYINGS), "llm": llm_status()}
 
     def overview(self, underlying: str = "NIFTY") -> dict:
         surf = self.surface(underlying)

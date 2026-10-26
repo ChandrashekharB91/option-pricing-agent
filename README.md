@@ -15,14 +15,15 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | SVI smile fit, vol surface, calendar checks | Done; on live data RMSE 0.21 vol pts |
 | `price_option` and validator checks | Done; QuantLib-exact, withholds market-inconsistent prices |
 | FastAPI backend, Python client | Done |
-| Orchestrator and validator agents (Claude tool use) | Done; tested with a scripted model, needs an API key to run live |
+| Orchestrator and validator agents | Done; provider-neutral (Claude or any OpenAI-compatible API), tested with scripted models |
 | Streamlit dashboard: market & smile, pricer, book risk, agent chat | Done |
 
 ## Run the app (local)
 
 ```powershell
 pip install -e ".[app]"
-copy .env.example .env          # then fill in ANTHROPIC_API_KEY (and UPSTOX_ANALYTICS_TOKEN for live data)
+copy .env.example .env          # then set LLM_PROVIDER / LLM_API_KEY / LLM_MODEL (and UPSTOX_ANALYTICS_TOKEN for live data)
+python scripts/check_llm.py      # confirms the chosen model can run the agent
 
 # terminal 1: the API (docs at http://127.0.0.1:8000/docs)
 uvicorn optlib_app.api:app
@@ -47,12 +48,24 @@ outside market hours. `DATA_MODE=live` uses Upstox and FBIL; surfaces are cached
 
 From a notebook: `from optlib_app.client import PricingClient; PricingClient().price("2026-10-27", 22500, "call", lots=2)`.
 
-**Agents.** The orchestrator (Claude, tool use) calls the pricing tools and explains results; it is instructed never
-to state a number that did not come from a tool. The validator is a separate call that sees only the question and
-the tool inputs/outputs (never the orchestrator's text) and returns PASS/WARN/FAIL. Any deterministic FAIL or
-validator FAIL withholds the answer. Models are set by `ORCHESTRATOR_MODEL` / `VALIDATOR_MODEL`
-(default `claude-sonnet-5-5`).
-| SVI surface, validator, API, agent, dashboard | Planned (phase 1) |
+**Agents.** The orchestrator calls the pricing tools and explains results; it is instructed never to state a
+number that did not come from a tool, and every number in its answer is checked against the tool results
+(untraceable numbers are listed and the answer is marked WARN). The validator is a separate call that sees only
+the question and the tool inputs/outputs (never the orchestrator's text) and returns PASS/WARN/FAIL. Any
+deterministic FAIL or validator FAIL withholds the answer.
+
+**Which LLM.** The agents run on whatever API `.env` names; nothing in the code is tied to one vendor.
+
+| `LLM_PROVIDER` | Endpoint | Notes |
+| --- | --- | --- |
+| `anthropic` | Anthropic API | Claude; default model `claude-sonnet-5-5` |
+| `groq`, `gemini`, `openrouter`, `github`, `cerebras`, `mistral`, `openai` | preset OpenAI-compatible URL | free tiers available on most; set `LLM_MODEL` |
+| `ollama` | `http://localhost:11434/v1` | local, free, no key; data stays on the machine |
+| `custom` | `LLM_BASE_URL` | any OpenAI-compatible server (e.g. an internal gateway) |
+
+After setting it, run `python scripts/check_llm.py`: it sends one pricing question through the full agent on
+the recorded snapshot and reports whether the model called the tool correctly, kept its numbers grounded, and
+what the validator said.
 
 ## Walkthrough notebook
 
