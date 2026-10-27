@@ -74,5 +74,24 @@ class PricingClient:
             raise PricingAPIError(resp.status_code, resp.text[:300])
         return resp.text
 
+    def strategy_meta(self, underlying: str = "NIFTY"):
+        return self._req("GET", "/strategy/meta", params={"underlying": underlying})
+
+    def recommend(self, capital: float, view: Optional[dict] = None, expiry: Optional[str] = None,
+                  families: Optional[list] = None, risk_budget: float = 0.5, objective: str = "risk_adjusted",
+                  top: int = 8, underlying: str = "NIFTY"):
+        return self._req("POST", "/strategy/recommend", json={
+            "capital": capital, "view": view or {}, "expiry": expiry, "families": families, "risk_budget": risk_budget,
+            "objective": objective, "top": top, "underlying": underlying})
+
+    def project_strategy(self, legs: list[dict], lots: int = 1, view: Optional[dict] = None, underlying: str = "NIFTY",
+                         name: str = "Custom strategy"):
+        return self._req("POST", "/strategy/project", json={"legs": legs, "lots": lots, "view": view or {},
+                                                            "underlying": underlying, "name": name})
+
+    def hedge(self, positions: list[dict], budget: float, view: Optional[dict] = None):
+        return self._req("POST", "/strategy/hedge", json={"positions": positions, "budget": budget,
+                                                          "view": view or {"source": "model"}})
+
     def ask(self, question: str, history: Optional[list] = None):
         return self._req("POST", "/agent/ask", json={"question": question, "history": history or []})

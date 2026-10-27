@@ -28,6 +28,11 @@ from optlib.validator import validate
 from optlib.data.bhavcopy import load_bhavcopy, parse_rows
 from optlib.data.history import History, load_history
 from optlib.pnl_explain import explain
+from optlib.charges import Charges
+from optlib.margin import MarginParams
+from optlib.projector import NotQuoted
+from optlib.recommender import (DISCLAIMER, View, find_hedges, log_event, market_state, project_custom,
+                                recommend)
 from optlib.risk import (Leg, Limits, backtest, check_limits, greeks_by_expiry, historical_scenarios, stress_tests,
                          var_es)
 
@@ -361,3 +366,82 @@ class PricingService:
             except ServiceError as exc:
                 pnl = {"error": str(exc)}
         return render_risk_report(risk, pnl)
+
+    # ------------------------------------------------------------------ strategies (phase 3)
+    def market_state(self, underlying: str = "NIFTY", expiry=None):
+        """Forward, smile, live bid/ask, futures and realised vol for one expiry, as the projector needs them."""
+        underlying = self._check_underlying(underlying)
+        exps = self.expiries(underlying)
+        exp = _to_date(expiry) if expiry else (exps[0] if exps else None)
+        if exp is None:
+            raise ServiceError(f"no expiries for {underlying} in {self.mode} mode")
+        surf = self._surface_for(underlying, exp)
+        sm = self._smile(surf, exp)
+        try:
+            hist = self.history()
+        except (OSError, ValueError, KeyError):
+            hist = None
+        chain = self.source().option_chain(underlying, exp)
+        return market_state(surf, sm, chain, self.source().futures(underlying), self.lot_size(underlying), hist)
+
+    def _costs(self):
+        return Charges.load(self.settings.charges_path), MarginParams.load(self.settings.margin_path)
+
+    @staticmethod
+    def _view(view: Optional[dict]) -> View:
+        v = dict(view or {})
+        if v.get("horizon"):
+            v["horizon"] = _to_date(v["horizon"])
+        try:
+            return View(**{k: v[k] for k in ("source", "target", "horizon", "vol", "iv_shift") if v.get(k) is not None})
+        except (TypeError, ValueError) as exc:
+            raise ServiceError(f"view: {exc}") from exc
+
+    def recommend(self, capital: float, view: Optional[dict] = None, underlying: str = "NIFTY", expiry=None,
+                  families: Optional[list] = None, risk_budget: float = 0.5, objective: str = "risk_adjusted",
+                  top: int = 8) -> dict:
+        state = self.market_state(underlying, expiry)
+        v = self._view(view)
+        if v.horizon and not (state.as_of.date() <= v.horizon <= state.expiry):
+            raise ServiceError(f"horizon must be between {state.as_of.date()} and the expiry {state.expiry}")
+        charges, margin = self._costs()
+        try:
+            out = recommend(state, float(capital), v, charges, margin, families, risk_budget, objective, top)
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
+        out["data_mode"] = self.mode
+        self._audit("recommend", {"capital": capital, "view": view, "underlying": underlying, "expiry": str(expiry),
+                                  "families": families, "risk_budget": risk_budget, "objective": objective}, out)
+        return _clean(out)
+
+    def project_strategy(self, legs: list[dict], lots: int = 1, view: Optional[dict] = None,
+                         underlying: str = "NIFTY", name: str = "Custom strategy") -> dict:
+        if not legs:
+            raise ServiceError("add at least one leg")
+        exp = legs[0].get("expiry")
+        state = self.market_state(underlying, exp)
+        charges, margin = self._costs()
+        try:
+            return _clean(project_custom(state, legs, int(lots), self._view(view), charges, margin, name))
+        except (ValueError, KeyError) as exc:
+            raise ServiceError(str(exc)) from exc
+
+    def hedge(self, positions: list[dict], budget: float, view: Optional[dict] = None, underlying: str = "NIFTY",
+              top: int = 3) -> dict:
+        if not positions:
+            raise ServiceError("the book is empty")
+        state = self.market_state(underlying, positions[0].get("expiry"))
+        charges, margin = self._costs()
+        try:
+            out = find_hedges(state, positions, self._view(view or {"source": "model"}), charges, margin,
+                              float(budget), top)
+        except (ValueError, NotQuoted) as exc:
+            raise ServiceError(str(exc)) from exc
+        self._audit("hedge", {"positions": positions, "budget": budget, "view": view}, out)
+        return _clean(out)
+
+    def _audit(self, kind: str, request: dict, result: dict) -> None:
+        try:
+            log_event(self.settings.audit_log_path, kind, request, result)
+        except OSError:
+            pass  # the audit log must never break a request

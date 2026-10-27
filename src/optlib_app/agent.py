@@ -43,6 +43,10 @@ Rules:
 5. Explain briefly: the key drivers (forward, vol and where it came from, time to expiry), and where the
    model is least reliable (e.g. SVI extrapolation beyond quoted strikes).
 6. Be concise. Use desk units: vega per vol point, theta per calendar day, rho per basis point, values in Rs.
+7. Strategy ideas (recommend_strategies, project_strategy, find_hedge) are model output for internal analysis,
+   not advice. Lead with each idea's maximum loss, capital needed and chance of profit before its upside, say
+   which market view they assume, and say plainly when no idea has a positive expected profit. Ask for the
+   capital amount if the user has not given one. End with the disclaimer from the tool result, word for word.
 """
 
 VALIDATOR_PROMPT = """You are an independent model validator for an option pricing system.
@@ -132,6 +136,63 @@ TOOLS += [
             "day1": {"type": "string", "description": "YYYY-MM-DD"}}, "required": ["positions", "day0", "day1"]},
     },
 ]
+
+VIEW_SCHEMA = {"type": "object", "description": "market view; default source 'blend' (half user, half model)",
+               "properties": {
+                   "source": {"type": "string", "enum": ["user", "market", "model", "blend"]},
+                   "target": {"type": "number", "description": "index level the user expects at the horizon"},
+                   "horizon": {"type": "string", "description": "YYYY-MM-DD, on or before expiry"},
+                   "vol": {"type": "number", "description": "user's volatility for the move, decimal (0.15)"},
+                   "iv_shift": {"type": "number", "description": "implied vol change by the horizon, decimal"}}}
+LEGS_SCHEMA = {"type": "array", "items": {"type": "object", "properties": {
+    "instrument": {"type": "string", "enum": ["call", "put", "future"]},
+    "side": {"type": "string", "enum": ["buy", "sell"]}, "strike": {"type": "number"},
+    "expiry": {"type": "string"}, "ratio": {"type": "integer"}}, "required": ["instrument", "side", "expiry"]}}
+
+TOOLS += [
+    {
+        "name": "recommend_strategies",
+        "description": "Rank option strategies (buy options, debit spreads, hedged selling, naked selling, futures + "
+                       "options) for a capital amount and a market view. Prices at executable bid/ask with all "
+                       "charges, estimates margin, sizes lots to the capital and a risk budget, and projects P&L "
+                       "(expected, probability of profit, max loss, breakevens). Internal analysis, not advice.",
+        "input_schema": {"type": "object", "properties": {
+            "capital": {"type": "number", "description": "rupees available"}, "view": VIEW_SCHEMA,
+            "underlying": {"type": "string"}, "expiry": {"type": "string"},
+            "families": {"type": "array", "items": {"type": "string",
+                         "enum": ["buy", "debit", "hedged", "naked", "futures"]}},
+            "risk_budget": {"type": "number", "description": "max loss as a share of capital, default 0.5"},
+            "objective": {"type": "string", "enum": ["risk_adjusted", "expected_return", "probability"]}},
+            "required": ["capital"]},
+    },
+    {
+        "name": "project_strategy",
+        "description": "P&L projection of a strategy the user describes: entry cost at bid/ask, charges, margin, "
+                       "max profit/loss, breakevens, expected P&L and probability of profit under each view, Greeks.",
+        "input_schema": {"type": "object", "properties": {
+            "legs": LEGS_SCHEMA, "lots": {"type": "integer"}, "view": VIEW_SCHEMA, "underlying": {"type": "string"}},
+            "required": ["legs"]},
+    },
+    {
+        "name": "find_hedge",
+        "description": "Search futures and option trades (1 to 3 lots) that most reduce a book's expected shortfall "
+                       "within a cash budget; returns risk before and after each hedge.",
+        "input_schema": {"type": "object", "properties": {
+            "positions": POSITIONS_SCHEMA, "budget": {"type": "number", "description": "rupees for premium + margin"},
+            "view": VIEW_SCHEMA}, "required": ["positions", "budget"]},
+    },
+]
+STRATEGY_TOOLS = ("recommend_strategies", "project_strategy", "find_hedge")
+
+
+def _idea(i: dict, source: str) -> dict:
+    return {"label": i["strategy"]["label"], "family": i["strategy"]["family_label"], "lots": i["lots"],
+            "legs": [{"leg": l["label"], "price": l["price"]} for l in i["legs"]],
+            "capital_required": i["capital_required"], "premium": i["premium"], "margin": i["margin"]["total"],
+            "charges": i["entry_charges"], "max_profit": i["max_profit"], "max_loss": i["max_loss"],
+            "unlimited_loss": i["unlimited_loss"], "stress_loss_3sd": i["stress_loss"],
+            "breakevens": i["breakevens"], "chosen_view": i["views"][source], "market_view": i["views"]["market"],
+            "greeks": i["greeks"]}
 
 
 class AgentUnavailable(Exception):
@@ -302,6 +363,24 @@ class OptionPricingAgent:
             return {k: e[k] for k in ("day0", "day1", "totals", "unexplained_share", "status", "notes")} | {
                 "legs": [{k: l[k] for k in ("label", "actual", "delta", "gamma", "vega", "theta", "unexplained",
                                             "vol0", "vol1", "forward0", "forward1")} for l in e["legs"]]}
+        if name == "recommend_strategies":
+            r = svc.recommend(args["capital"], args.get("view"), args.get("underlying", "NIFTY"), args.get("expiry"),
+                              args.get("families"), args.get("risk_budget", 0.5), args.get("objective", "risk_adjusted"),
+                              top=5)
+            src = r["view"]["source"]
+            return {"as_of": r["as_of"], "expiry": r["expiry"], "forward": r["forward"], "capital": r["capital"],
+                    "lot_size": r["lot_size"], "view": r["view"], "views": r["views"], "objective": r["objective_label"],
+                    "considered": r["considered"], "feasible": r["feasible"], "note": r["note"],
+                    "ideas": [_idea(i, src) for i in r["ideas"]],
+                    "not_affordable": [{k: b[k] for k in ("family", "count", "min_capital")} for b in r["blocked"]],
+                    "disclaimer": r["disclaimer"]}
+        if name == "project_strategy":
+            r = svc.project_strategy(args["legs"], args.get("lots", 1), args.get("view"), args.get("underlying", "NIFTY"))
+            src = (args.get("view") or {}).get("source", "blend")
+            return _idea(r, src) | {"views": r["views"], "disclaimer": r["disclaimer"]}
+        if name == "find_hedge":
+            r = svc.hedge(args["positions"], args["budget"], args.get("view"))
+            return {k: r[k] for k in ("as_of", "expiry", "view", "budget", "before", "hedges", "disclaimer")}
         if name == "scenario_grid":
             return svc.scenarios(args["positions"], args.get("spot_shocks"), args.get("vol_shocks"))
         raise ServiceError(f"unknown tool {name}")
@@ -352,6 +431,10 @@ class OptionPricingAgent:
                               tool_calls=[asdict(r) for r in records], provider=self.llm.provider,
                               model=self.llm.model)
 
+        disclaimer = next((r.output.get("disclaimer") for r in records
+                           if r.name in STRATEGY_TOOLS and isinstance(r.output, dict) and r.output.get("disclaimer")), None)
+        if disclaimer and disclaimer not in answer:
+            answer = f"{answer.rstrip()}\n\n{disclaimer}"
         deterministic = _worst(*self._statuses(records)) if records else "PASS"
         loose = ungrounded_numbers(answer, question, records)
         status = _worst(deterministic, verdict, "WARN" if loose else "PASS")

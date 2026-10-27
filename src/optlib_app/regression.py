@@ -74,6 +74,7 @@ TOLERANCES: list[tuple[str, str, Tol]] = [
     ("book", "*/value", Tol(0.5, 0, "Rs 0.50 on the book")),
     ("book", "*", Tol(1e-8, 1e-4, "Greeks: 0.01% relative")),
     ("risk", "pnl_explain/*", Tol(1.0, 0, "Rs 1 per P&L component")),
+    ("strategies", "*", Tol(1.0, 1e-4, "Rs 1 or 0.01%: projections integrate over a fitted smile")),
     ("risk", "*", Tol(1e-6, 1e-4, "0.01% relative")),
 ]
 
@@ -254,6 +255,33 @@ def _risk(svc) -> dict:
     return out
 
 
+def _strategies(svc) -> dict:
+    out = {}
+    r = svc.recommend(20000, {"source": "user", "target": 22900})
+    out["recommend_20k_user_22900/considered"] = r["considered"]
+    out["recommend_20k_user_22900/feasible"] = r["feasible"]
+    for n, i in enumerate(r["ideas"][:3], 1):
+        out[f"recommend_20k_user_22900/{n}/label"] = i["strategy"]["label"]
+        out[f"recommend_20k_user_22900/{n}/lots"] = i["lots"]
+        out[f"recommend_20k_user_22900/{n}/capital"] = i["capital_required"]
+        out[f"recommend_20k_user_22900/{n}/expected"] = i["views"]["user"]["expected"]
+    legs = [{"instrument": "call", "side": "buy", "strike": 22500, "expiry": "2026-10-27"},
+            {"instrument": "call", "side": "sell", "strike": 22700, "expiry": "2026-10-27"}]
+    p = svc.project_strategy(legs, 1)
+    for k in ("premium", "entry_charges", "capital_required", "max_profit", "max_loss"):
+        out[f"bull_call_22500_22700/{k}"] = p[k]
+    out["bull_call_22500_22700/margin"] = p["margin"]["total"]
+    out["bull_call_22500_22700/breakeven"] = p["breakevens"][0]
+    for v in ("market", "model", "user"):
+        out[f"bull_call_22500_22700/{v}_expected"] = p["views"][v]["expected"]
+        out[f"bull_call_22500_22700/{v}_prob_profit"] = p["views"][v]["prob_profit"]
+    h = svc.hedge(SAMPLE_BOOK, 100000)
+    out["hedge/before_es95"] = h["before"]["es95"]
+    out["hedge/best"] = h["hedges"][0]["label"]
+    out["hedge/best_es95"] = h["hedges"][0]["es95"]
+    return out
+
+
 SECTIONS: dict[str, tuple[str, Callable]] = {  # name -> (what it freezes, function(svc))
     "black76": ("Black-76 price and 10 Greeks on a 420-case grid", lambda svc: _black76()),
     "implied_vol": ("implied vol recovered from grid prices", lambda svc: _implied_vol()),
@@ -264,6 +292,7 @@ SECTIONS: dict[str, tuple[str, Callable]] = {  # name -> (what it freezes, funct
     "pricing": ("prices, Greeks and validator verdicts for 6 NIFTY options", _pricing),
     "book": ("sample book value and Greeks", _book),
     "risk": ("Phase 2: VaR, ES, backtest, stress, P&L explain on the sample book", _risk),
+    "strategies": ("Phase 3: recommender, P&L projector and hedge finder", _strategies),
 }
 
 

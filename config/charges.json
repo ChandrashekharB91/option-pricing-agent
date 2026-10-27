@@ -1,0 +1,19 @@
+{
+  "_note": "Indian F&O transaction charges used by the strategy P&L projector. Verify before use; rates change with budgets and exchange circulars.",
+  "_sources": {
+    "stt": "Budget 2026, effective 1 Apr 2026: https://www.icicidirect.com/ilearn/futures-and-options/articles/stt-changes-in-budget-2026-what-f-o-traders-should-know",
+    "exchange_sebi_stamp_gst": "https://support.rupeezy.in/support/solutions/articles/2100044912-what-are-nse-transaction-and-other-charges-as-per-exchange-and-government"
+  },
+  "as_of": "2026-10-27",
+  "brokerage_per_order": 20.0,
+  "stt_option_sell_premium": 0.0015,
+  "stt_option_exercise_intrinsic": 0.0015,
+  "stt_future_sell": 0.0005,
+  "exchange_option_premium": 0.0003503,
+  "exchange_future_turnover": 0.000019,
+  "sebi_per_crore": 10.0,
+  "ipft_per_crore": 10.0,
+  "stamp_option_buy": 0.00003,
+  "stamp_future_buy": 0.00002,
+  "gst": 0.18
+}

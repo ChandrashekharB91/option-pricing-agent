@@ -1,6 +1,6 @@
 # Regression report: PASS
 
-Run 2026-10-27T10:22:36+00:00 at commit 3fde94b; golden values from 2026-10-27T10:21:21+00:00 (Initial Phase 1 baseline for model sign-off (recorded 23 Oct 2026 NIFTY snapshot)).
+Run 2026-10-27T14:05:36+00:00 at commit ef68452; golden values from 2026-10-27T14:02:33+00:00 (Add Phase 3 strategies section (recommender, projector, hedge finder)).
 
 ## Golden values
 
@@ -14,6 +14,7 @@ Run 2026-10-27T10:22:36+00:00 at commit 3fde94b; golden values from 2026-10-27T1
 | pricing | prices, Greeks and validator verdicts for 6 NIFTY options | 144 | 0 | 0.00e+00 | PASS |
 | book | sample book value and Greeks | 6 | 0 | 0.00e+00 | PASS |
 | risk | Phase 2: VaR, ES, backtest, stress, P&L explain on the sample book | 23 | 0 | 0.00e+00 | PASS |
+| strategies | Phase 3: recommender, P&L projector and hedge finder | 30 | 0 | 0.00e+00 | PASS |
 
 ## Benchmark gates
 
@@ -46,4 +47,5 @@ Run 2026-10-27T10:22:36+00:00 at commit 3fde94b; golden values from 2026-10-27T1
 | book | `*/value` | abs 0.5 | Rs 0.50 on the book |
 | book | `*` | abs 1e-08 + rel 0.0001 | Greeks: 0.01% relative |
 | risk | `pnl_explain/*` | abs 1 | Rs 1 per P&L component |
+| strategies | `*` | abs 1 + rel 0.0001 | Rs 1 or 0.01%: projections integrate over a fitted smile |
 | risk | `*` | abs 1e-06 + rel 0.0001 | 0.01% relative |

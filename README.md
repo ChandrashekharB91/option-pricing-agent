@@ -18,6 +18,7 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | Orchestrator and validator agents | Done; provider-neutral (Claude or any OpenAI-compatible API), tested with scripted models |
 | Streamlit dashboard: market & smile, pricer, book risk, agent chat | Done |
 | Risk: historical VaR/ES, backtest, stress tests, limits, P&L explain, HTML risk report | Done (Phase 2); limits are placeholders until risk sets them |
+| Strategy lab: recommender, P&L projector, hedge finder | Done (Phase 3); margins are estimates; bhavcopy backtest pending |
 
 ## Run the app (local)
 
@@ -94,6 +95,46 @@ All risk numbers come from full Black-76 revaluation of the book, not Greek appr
 Data: Upstox historical daily candles (public, no token) for index and India VIX history, cached to CSV;
 NSE bhavcopy files from nsearchives. Replay mode uses the recorded files in `tests/fixtures`.
 Not yet included: exchange SPAN margin (needs NSE SPAN risk-parameter files).
+
+## Strategy lab (Phase 3): recommender, P&L projector, hedge finder
+
+Internal analysis tool, not investment advice. Every result carries this disclaimer: *This is not financial
+advice. The recommendations are model output for internal analysis only. The author is not responsible for any
+losses or gains from decisions based on them.*
+
+- **Recommender.** Enter any capital amount and a market view. The engine works through the library of
+  buy-options, debit-spread, hedged-selling, naked-selling and futures-plus-options strategies, roughly 90 to 100
+  of them at listed strikes spaced by the expected move. It then:
+  - prices each strategy at the bid/ask you would actually pay, with all charges;
+  - estimates margin and sizes the trade in lots to fit the capital and a loss budget (default 50% of capital);
+  - projects the P&L and ranks by expected profit per rupee at risk, expected return on capital, or chance of profit.
+- **Views.** The four views are:
+  - *my view*: target level, horizon, vol and IV change;
+  - *model*: EWMA realised vol, no drift;
+  - *market-implied*: the risk-neutral density from the smile, re-centred so it reprices the quotes;
+  - *blend*: half my view, half the model.
+
+  Under the market view every strategy loses its costs on average, so any edge shown comes from the view.
+- **P&L projector / strategy builder.** For any combination of calls, puts and the future it shows:
+  - payoff at expiry, at the horizon and now;
+  - breakevens, max profit and loss, and loss in a 3-sd move;
+  - expected P&L, chance of profit and ES95 under each view;
+  - Greeks, a cost breakdown, and a P&L heatmap by index level and day.
+- **Hedge finder.** Searches futures, options and spreads (1 to 3 lots) that most reduce a book's ES95 within a
+  cash budget.
+- **Costs and margin.** Charges (STT at the 1 Apr 2026 rates, exchange, SEBI, stamp duty, GST, brokerage) are in
+  `config/charges.json`. The SPAN-style margin estimate's parameters are in `config/margin.json`; confirm against
+  the broker. Every recommendation and hedge search is appended to `data/recommendations.jsonl` for review.
+
+| Endpoint | What it returns |
+| --- | --- |
+| `GET /strategy/meta` | families, objectives, views, expiries, disclaimer |
+| `POST /strategy/recommend` | ranked, sized ideas with projections; families that do not fit the capital |
+| `POST /strategy/project` | full projection of a user-built strategy, with a P&L heatmap |
+| `POST /strategy/hedge` | best hedges for a book, risk before and after |
+
+The agent has matching tools (`recommend_strategies`, `project_strategy`, `find_hedge`) and always ends such
+answers with the disclaimer.
 
 ## Walkthrough notebook
 

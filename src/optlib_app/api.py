@@ -83,6 +83,46 @@ class ReportRequest(BookRequest):
     day1: Optional[date] = None
 
 
+class ViewIn(BaseModel):
+    source: Literal["user", "market", "model", "blend"] = "blend"
+    target: Optional[float] = Field(default=None, gt=0, description="index level expected at the horizon")
+    horizon: Optional[date] = Field(default=None, description="default: expiry")
+    vol: Optional[float] = Field(default=None, gt=0, lt=3, description="volatility of the move, decimal")
+    iv_shift: float = Field(default=0.0, gt=-0.5, lt=0.5, description="implied vol change by the horizon, decimal")
+
+
+class RecommendRequest(BaseModel):
+    capital: float = Field(gt=0, description="rupees available; any amount")
+    view: ViewIn = Field(default_factory=ViewIn)
+    underlying: str = "NIFTY"
+    expiry: Optional[date] = None
+    families: Optional[list[Literal["buy", "debit", "hedged", "naked", "futures"]]] = None
+    risk_budget: float = Field(default=0.5, gt=0, le=1, description="max loss as a share of capital")
+    objective: Literal["risk_adjusted", "expected_return", "probability"] = "risk_adjusted"
+    top: int = Field(default=8, ge=1, le=20)
+
+
+class LegIn(BaseModel):
+    instrument: Literal["call", "put", "future"]
+    side: Literal["buy", "sell"]
+    expiry: date
+    strike: Optional[float] = Field(default=None, gt=0)
+    ratio: int = Field(default=1, ge=1, le=10)
+
+
+class ProjectRequest(BaseModel):
+    legs: list[LegIn] = Field(min_length=1, max_length=8)
+    lots: int = Field(default=1, ge=1, le=50)
+    view: ViewIn = Field(default_factory=ViewIn)
+    underlying: str = "NIFTY"
+    name: str = "Custom strategy"
+
+
+class HedgeRequest(BookRequest):
+    budget: float = Field(gt=0, description="rupees for premium plus extra margin")
+    view: ViewIn = Field(default_factory=lambda: ViewIn(source="model"))
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=3)
     history: list[dict] = Field(default_factory=list)
@@ -145,6 +185,32 @@ def pnl_explain(req: ExplainRequest, svc: PricingService = Depends(get_service))
 @app.post("/risk/report", response_class=HTMLResponse)
 def risk_report(req: ReportRequest, svc: PricingService = Depends(get_service)):
     return HTMLResponse(_call(svc.risk_report, _positions(req), req.day0, req.day1))
+
+
+@app.get("/strategy/meta")
+def strategy_meta(underlying: str = "NIFTY", svc: PricingService = Depends(get_service)):
+    from optlib.recommender import DISCLAIMER, OBJECTIVES, VIEW_SOURCES
+    from optlib.strategies import FAMILIES
+
+    return {"families": FAMILIES, "objectives": OBJECTIVES, "view_sources": VIEW_SOURCES, "disclaimer": DISCLAIMER,
+            "expiries": [d.isoformat() for d in _call(svc.expiries, underlying)]}
+
+
+@app.post("/strategy/recommend")
+def strategy_recommend(req: RecommendRequest, svc: PricingService = Depends(get_service)):
+    return _call(svc.recommend, req.capital, req.view.model_dump(), req.underlying, req.expiry, req.families,
+                 req.risk_budget, req.objective, req.top)
+
+
+@app.post("/strategy/project")
+def strategy_project(req: ProjectRequest, svc: PricingService = Depends(get_service)):
+    return _call(svc.project_strategy, [l.model_dump() for l in req.legs], req.lots, req.view.model_dump(),
+                 req.underlying, req.name)
+
+
+@app.post("/strategy/hedge")
+def strategy_hedge(req: HedgeRequest, svc: PricingService = Depends(get_service)):
+    return _call(svc.hedge, _positions(req), req.budget, req.view.model_dump())
 
 
 @app.post("/agent/ask")

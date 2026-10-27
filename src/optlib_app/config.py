@@ -40,6 +40,9 @@ class Settings:
         "2026-10-22": FIX / "nse_fo_bhavcopy_nifty_20261022.csv",
         "2026-10-23": FIX / "nse_fo_bhavcopy_nifty_20261023.csv"})
     limits_path: Path = ROOT / "config" / "risk_limits.json"
+    charges_path: Path = ROOT / "config" / "charges.json"
+    margin_path: Path = ROOT / "config" / "margin.json"
+    audit_log_path: Path = ROOT / "data" / "recommendations.jsonl"
     cache_dir: Path = ROOT / "data" / "cache"
     surface_ttl_seconds: float = field(default_factory=lambda: float(get_setting("SURFACE_TTL_SECONDS", "60")))
     api_url: str = field(default_factory=lambda: get_setting("PRICING_API_URL", "http://127.0.0.1:8000"))

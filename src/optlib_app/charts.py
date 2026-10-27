@@ -94,3 +94,57 @@ def limits_bar(limits: list) -> go.Figure:
     fig.update_layout(title="Limit utilisation (amber from 80%, red above 100%)", xaxis_title="% of limit",
                       xaxis_range=[0, 160], **{**LAYOUT, "height": 80 + 45 * len(limits)})
     return fig
+
+
+# ------------------------------------------------------------------ strategies (phase 3)
+
+def payoff_chart(p: dict, view: dict | None = None, horizon_label: str = "at horizon") -> go.Figure:
+    """P&L of a strategy across index levels: at expiry, at the view's horizon and right now."""
+    c = p["curves"]
+    F = c["F"]
+    fig = go.Figure()
+    if view:  # 90% range of the index under the chosen view
+        fig.add_vrect(x0=view["p5"], x1=view["p95"], fillcolor=ACCENT, opacity=0.07, line_width=0,
+                      annotation_text=f"90% range, {view['name']} view", annotation_position="top left",
+                      annotation_font_color=GREY)
+    fig.add_hline(y=0, line=dict(color=GREY, width=1))
+    fig.add_trace(go.Scatter(x=F, y=c["now"], name="now", line=dict(color=GREY, width=1, dash="dot"),
+                             hovertemplate="index %{x:,.0f}: Rs %{y:,.0f}<extra>now</extra>"))
+    if c["horizon"] != c["expiry"]:
+        fig.add_trace(go.Scatter(x=F, y=c["horizon"], name=horizon_label, line=dict(color=AMBER, width=2),
+                                 hovertemplate="index %{x:,.0f}: Rs %{y:,.0f}<extra>horizon</extra>"))
+    fig.add_trace(go.Scatter(x=F, y=c["expiry"], name="at expiry", line=dict(color=ACCENT, width=3),
+                             hovertemplate="index %{x:,.0f}: Rs %{y:,.0f}<extra>expiry</extra>"))
+    for b in p["breakevens"]:
+        fig.add_vline(x=b, line=dict(color=GREY, width=1, dash="dash"),
+                      annotation_text=f"breakeven {b:,.0f}", annotation_position="bottom right",
+                      annotation_font_color=GREY)
+    fig.update_layout(title=f"{p['strategy']['label']} x {p['lots']} lot(s): P&L after all charges",
+                      xaxis_title="NIFTY forward", yaxis_title="P&L (Rs)", legend=dict(orientation="h", y=-0.2),
+                      **{**LAYOUT, "height": 420})
+    return fig
+
+
+def pnl_heatmap(grid: dict) -> go.Figure:
+    z = np.asarray(grid["pnl"]).T  # rows: index level, columns: time
+    fig = go.Figure(go.Heatmap(z=z, x=grid["times"], y=[f"{f:,.0f}" for f in grid["F"]], colorscale="RdYlGn",
+                               zmid=0, hovertemplate="%{x}, index %{y}: Rs %{z:,.0f}<extra></extra>",
+                               colorbar=dict(title="Rs")))
+    fig.update_xaxes(type="category")
+    fig.update_yaxes(type="category")
+    fig.update_layout(title="P&L by index level and date (sticky-strike vols, after charges)",
+                      xaxis_title="date (IST)", yaxis_title="NIFTY forward", **{**LAYOUT, "height": 480})
+    return fig
+
+
+def hedge_bar(h: dict) -> go.Figure:
+    rows = [("Book today", h["before"]["es95"])] + [(x["label"], x["es95"]) for x in h["hedges"]]
+    fig = go.Figure(go.Bar(x=[r[1] for r in rows], y=[r[0] for r in rows], orientation="h",
+                           marker_color=[LOSS] + [GAIN] * (len(rows) - 1),
+                           text=[_rs(r[1]) for r in rows], textposition="outside",
+                           hovertemplate="%{y}: ES95 Rs %{x:,.0f}<extra></extra>"))
+    fig.update_layout(title="Expected shortfall (95%) at the horizon, before and after each hedge",
+                      xaxis_title="Rs", yaxis=dict(autorange="reversed"),
+                      xaxis_range=[0, 1.3 * max(r[1] for r in rows)],
+                      **{**LAYOUT, "height": 120 + 50 * len(rows), "margin": dict(t=50, b=40, l=300, r=60)})
+    return fig

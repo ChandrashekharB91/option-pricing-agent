@@ -73,8 +73,8 @@ expiry_rows = ov["expiries"]
 expiry_ids = [e["expiry"] for e in expiry_rows]
 lot = ov["lot_size"]
 
-tab_market, tab_price, tab_book, tab_risk, tab_agent = st.tabs(
-    ["Market & smile", "Pricer", "Book risk", "Risk (VaR, stress, P&L)", "Ask the agent"])
+tab_market, tab_price, tab_book, tab_risk, tab_strat, tab_agent = st.tabs(
+    ["Market & smile", "Pricer", "Book risk", "Risk (VaR, stress, P&L)", "Strategy lab", "Ask the agent"])
 
 # ------------------------------------------------------------------ market
 with tab_market:
@@ -287,6 +287,190 @@ with tab_risk:
                     show_error(exc)
     else:
         st.info("Press **Run risk** to compute VaR, ES, the backtest, stress tests and limits for the book.")
+
+
+# ------------------------------------------------------------------ strategies (phase 3)
+VIEW_LABELS = {"blend": "Blend: my view + model", "user": "My view", "model": "Model (realised vol)",
+               "market": "Market-implied"}
+
+
+def idea_rows(ideas: list, source: str) -> pd.DataFrame:
+    out = []
+    for n, i in enumerate(ideas, 1):
+        v = i["views"][source]
+        out.append({"#": n, "strategy": i["strategy"]["label"], "family": i["strategy"]["family_label"],
+                    "lots": i["lots"], "capital needed": i["capital_required"],
+                    "max loss": "open-ended" if i["unlimited_loss"] else f"{i['max_loss']:,.0f}",
+                    "max profit": "unlimited" if i["max_profit"] is None else f"{i['max_profit']:,.0f}",
+                    "expected P&L": v["expected"], "chance of profit": v["prob_profit"], "ES 95%": v["es95"],
+                    "breakevens": ", ".join(f"{b:,.0f}" for b in i["breakevens"]),
+                    "expected, market view": i["views"]["market"]["expected"]})
+    return pd.DataFrame(out)
+
+
+def show_strategy(p: dict, source: str, view_summary: dict | None):
+    v = p["views"][source]
+    c = st.columns(6)
+    c[0].metric("Capital needed", f"₹{p['capital_required']:,.0f}")
+    c[1].metric("Max loss", "open-ended" if p["unlimited_loss"] else f"₹{p['max_loss']:,.0f}",
+                help=None if not p["unlimited_loss"] else f"₹{p['stress_loss']:,.0f} in a 3-sd move by expiry")
+    c[2].metric("Max profit", "unlimited" if p["max_profit"] is None else f"₹{p['max_profit']:,.0f}")
+    c[3].metric("Expected P&L", f"₹{v['expected']:,.0f}", help=f"under the {source} view, after all charges")
+    c[4].metric("Chance of profit", f"{v['prob_profit']:.0%}")
+    c[5].metric("ES 95%", f"₹{v['es95']:,.0f}", help="average loss in the worst 5% of outcomes")
+    st.plotly_chart(charts.payoff_chart(p, {**view_summary, "name": source} if view_summary else None),
+                    use_container_width=True)
+    left, right = st.columns([3, 2])
+    legs = pd.DataFrame([{"leg": l["label"], "bid": l["bid"], "ask": l["ask"], "fill price": l["price"],
+                          "vol": l["vol"]} for l in p["legs"]])
+    left.dataframe(legs.style.format({"bid": "{:,.2f}", "ask": "{:,.2f}", "fill price": "{:,.2f}",
+                                      "vol": lambda x: "" if x is None or x != x else f"{x:.2%}"}),
+                   hide_index=True, use_container_width=True)
+    m = p["margin"]
+    costs = pd.DataFrame([
+        {"item": "Premium paid (+) / received (-)", "Rs": p["premium"]},
+        {"item": "of which bid-ask cost vs mid", "Rs": p["premium"] - p["fair_premium"]},
+        {"item": "Charges (brokerage, STT, fees, GST)", "Rs": p["entry_charges"]},
+        {"item": "Margin estimate (SPAN-style + exposure)", "Rs": m["total"]},
+        {"item": "Capital needed", "Rs": p["capital_required"]}])
+    right.dataframe(costs.style.format({"Rs": "{:,.0f}"}), hide_index=True, use_container_width=True)
+    g = p["greeks"]
+    st.caption(f"Position Greeks: delta {g['delta']:,.1f} units · gamma {g['gamma']:,.3f} · "
+               f"vega ₹{g['vega']:,.0f} per vol pt · theta ₹{g['theta']:,.0f} per day. "
+               f"Market view: expected ₹{p['views']['market']['expected']:,.0f}, model view: "
+               f"₹{p['views']['model']['expected']:,.0f}. {m['note']}.")
+
+
+with tab_strat:
+    try:
+        meta = client.strategy_meta(underlying)
+    except PricingAPIError as exc:
+        show_error(exc)
+        st.stop()
+    exp_row = expiry_rows[0]
+    st.caption("Enter the capital and your view; the engine prices every strategy at the bid/ask you would pay, "
+               "adds all charges and an estimated margin, sizes it to your capital, and projects the P&L.")
+    a1, a2, a3, a4 = st.columns(4)
+    capital = a1.number_input("Capital (₹)", min_value=1000.0, value=20000.0, step=5000.0, format="%.0f",
+                              help="Any amount; strategies are sized to fit it")
+    s_exp = a2.selectbox("Expiry", meta["expiries"], key="strat_exp")
+    erow = next(e for e in expiry_rows if e["expiry"] == s_exp)
+    objective = a3.selectbox("Rank by", list(meta["objectives"]), format_func=lambda k: meta["objectives"][k])
+    budget_pct = a4.slider("Max loss, % of capital", 10, 100, 50, 5)
+    b1, b2, b3, b4, b5 = st.columns(5)
+    source = b1.selectbox("Market view", list(VIEW_LABELS), format_func=VIEW_LABELS.get)
+    target = b2.number_input("My target level", value=float(round(erow["forward"] / 50) * 50), step=50.0,
+                             format="%.0f", help="Index level you expect at the horizon (my view)")
+    as_of = pd.Timestamp(ov.get("as_of") or h["as_of"]).date()
+    horizon = b3.date_input("Horizon", value=pd.Timestamp(s_exp).date(), min_value=as_of,
+                            max_value=pd.Timestamp(s_exp).date())
+    my_vol = b4.number_input("My vol (%)", value=round(erow["atm_vol"] * 100, 1), step=0.5, format="%.1f")
+    iv_shift = b5.number_input("IV change by horizon (vol pts)", value=0.0, step=1.0, format="%.1f")
+    families = st.multiselect("Strategy families", list(meta["families"]), default=list(meta["families"]),
+                              format_func=meta["families"].get)
+    view = {"source": source, "target": target, "horizon": str(horizon), "vol": my_vol / 100, "iv_shift": iv_shift / 100}
+
+    rec_tab, build_tab, hedge_tab = st.tabs(["Recommender", "Strategy builder", "Hedge finder"])
+    with rec_tab:
+        if st.button("Find strategies", type="primary"):
+            try:
+                st.session_state["rec"] = client.recommend(capital, view, s_exp, families, budget_pct / 100, objective)
+            except PricingAPIError as exc:
+                show_error(exc)
+        rec = st.session_state.get("rec")
+        if rec:
+            src = rec["view"]["source"]
+            vs = rec["views"][src]
+            m = st.columns(5)
+            m[0].metric("Forward", f"{rec['forward']:,.0f}")
+            m[1].metric("ATM implied vol", f"{rec['atm_vol']:.1%}")
+            m[2].metric("Model realised vol", "n/a" if rec["realised_vol"] is None else f"{rec['realised_vol']:.1%}")
+            m[3].metric("View: 90% range", f"{vs['p5'] / 1000:.1f}k-{vs['p95'] / 1000:.1f}k",
+                        help=f"{VIEW_LABELS[src]}: {vs['p5']:,.0f} to {vs['p95']:,.0f}; mean {vs['mean']:,.0f}")
+            m[4].metric("Strategies", f"{rec['feasible']} fit of {rec['considered']}")
+            if rec["note"]:
+                st.warning(rec["note"])
+            if rec["ideas"]:
+                df = idea_rows(rec["ideas"], src)
+                st.dataframe(df.style.format({"capital needed": "{:,.0f}", "expected P&L": "{:,.0f}",
+                                              "chance of profit": "{:.0%}", "ES 95%": "{:,.0f}",
+                                              "expected, market view": "{:,.0f}"}),
+                             hide_index=True, use_container_width=True)
+                pick = st.selectbox("Inspect", range(len(rec["ideas"])),
+                                    format_func=lambda i: f"{i + 1}. {rec['ideas'][i]['strategy']['label']}")
+                idea = rec["ideas"][pick]
+                st.markdown(f"**{idea['strategy']['label']}** ({idea['strategy']['family_label']}). {idea['why']} "
+                            + (f"_{idea['strategy']['note']}_" if idea["strategy"]["note"] else ""))
+                show_strategy(idea, src, vs)
+            if rec["blocked"]:
+                with st.expander("Strategies that do not fit this capital"):
+                    st.dataframe(pd.DataFrame(rec["blocked"]).rename(columns={"min_capital": "cheapest needs (₹)"})
+                                 .style.format({"cheapest needs (₹)": "{:,.0f}"}), hide_index=True,
+                                 use_container_width=True)
+        else:
+            st.info("Set the capital and view above, then press **Find strategies**.")
+
+    with build_tab:
+        st.caption("Build any combination and see its P&L before trading it. Sides: buy or sell; ratio = lots of "
+                   "that leg per unit.")
+        k0 = float(round(erow["forward"] / 100) * 100)
+        legs_df = st.data_editor(pd.DataFrame([
+            {"instrument": "call", "side": "buy", "strike": k0, "ratio": 1},
+            {"instrument": "call", "side": "sell", "strike": k0 + 200, "ratio": 1}]), num_rows="dynamic",
+            use_container_width=True, key="legs", column_config={
+                "instrument": st.column_config.SelectboxColumn(options=["call", "put", "future"]),
+                "side": st.column_config.SelectboxColumn(options=["buy", "sell"])})
+        lots_b = st.number_input("Lots", min_value=1, max_value=50, value=1)
+        if st.button("Project P&L", type="primary"):
+            legs = []
+            for r in legs_df.to_dict("records"):
+                if not r.get("instrument"):
+                    continue
+                leg = {"instrument": r["instrument"], "side": r["side"], "expiry": s_exp, "ratio": int(r["ratio"] or 1)}
+                if r["instrument"] != "future":
+                    leg["strike"] = float(r["strike"])
+                legs.append(leg)
+            try:
+                st.session_state["proj"] = client.project_strategy(legs, int(lots_b), view)
+            except PricingAPIError as exc:
+                show_error(exc)
+        proj = st.session_state.get("proj")
+        if proj:
+            st.markdown(proj["why"])
+            show_strategy(proj, view["source"], proj["views_summary"][view["source"]])
+            st.plotly_chart(charts.pnl_heatmap(proj["grid"]), use_container_width=True)
+
+    with hedge_tab:
+        st.caption("Uses the book from the **Book risk** tab. Searches futures, options and spreads (1 to 3 lots) "
+                   "that most reduce the book's expected shortfall at the horizon, within your cash budget.")
+        hb = st.number_input("Hedge budget (₹, premium + extra margin)", min_value=1000.0, value=50000.0,
+                             step=5000.0, format="%.0f")
+        if st.button("Find hedges", type="primary"):
+            positions = [dict(underlying=underlying, **row) for row in book.dropna().to_dict("records")]
+            try:
+                st.session_state["hedge"] = client.hedge(positions, hb, view)
+            except PricingAPIError as exc:
+                show_error(exc)
+        hg = st.session_state.get("hedge")
+        if hg:
+            bf = hg["before"]
+            st.markdown(f"Book today: ES95 ₹{bf['es95']:,.0f}, loss in a 3-sd move ₹{bf['stress_loss']:,.0f}, "
+                        f"delta {bf['greeks']['delta']:,.1f}, vega ₹{bf['greeks']['vega']:,.0f} per vol pt "
+                        f"({hg['view']} view).")
+            if hg["hedges"]:
+                st.plotly_chart(charts.hedge_bar(hg), use_container_width=True)
+                st.dataframe(pd.DataFrame([{
+                    "hedge": x["label"], "cash needed": x["cash_needed"], "ES95 after": x["es95"],
+                    "3-sd loss after": x["stress_loss"], "delta after": x["greeks"]["delta"],
+                    "vega after": x["greeks"]["vega"], "expected P&L after": x["expected"]} for x in hg["hedges"]])
+                    .style.format({c: "{:,.0f}" for c in ("cash needed", "ES95 after", "3-sd loss after",
+                                                          "vega after", "expected P&L after")} | {"delta after": "{:,.1f}"}),
+                    hide_index=True, use_container_width=True)
+            else:
+                st.warning("No hedge fits this budget.")
+
+    st.divider()
+    st.warning(f"**Disclaimer.** {meta['disclaimer']} Margins are estimates; confirm with the broker before trading.")
 
 # ------------------------------------------------------------------ agent
 with tab_agent:

@@ -1,0 +1,15 @@
+{
+  "_note": "SPAN-style margin ESTIMATE for strategy feasibility. Not the exchange's SPAN: the real parameters are in NSE's daily SPAN risk parameter files. Calibrated so a NIFTY futures lot needs about 5.6% SPAN + 2% exposure (about Rs 1.16 lakh at 23,500 x 65).",
+  "_sources": {
+    "nse_span_files": "https://www.nseindia.com/static/products-services/equity-derivatives-span-risk-parameter-files",
+    "typical_margins": "https://onetradejournal.com/glossary/span-margin",
+    "expiry_day_elm": "https://www.business-standard.com/amp/markets/news/sebi-announces-six-key-changes-to-curb-speculation-in-derivatives-trading-124100101316_1.html"
+  },
+  "price_scan_range": 0.056,
+  "vol_scan_range": 0.04,
+  "extreme_move_multiple": 2.0,
+  "extreme_move_cover": 0.35,
+  "exposure_margin": 0.02,
+  "expiry_day_extra_elm": 0.02,
+  "capital_buffer": 0.10
+}

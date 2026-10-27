@@ -5,3 +5,4 @@ Every change to `golden_phase1.json` needs a reason and a reviewer. Approve it i
 | Date | Commit | Author | Reason | Effect |
 | --- | --- | --- | --- | --- |
 | 2026-10-27 | 3fde94b | Claude | Initial Phase 1 baseline for model sign-off (recorded 23 Oct 2026 NIFTY snapshot) | 5255 values changed or added |
+| 2026-10-27 | ef68452 | Claude | Add Phase 3 strategies section (recommender, projector, hedge finder) | 30 values changed or added |

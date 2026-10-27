@@ -9,15 +9,16 @@
    "live_surface": 141,
    "pricing": 144,
    "risk": 23,
+   "strategies": 30,
    "synthetic_surface": 18
   },
-  "git_commit": "3fde94b",
+  "git_commit": "ef68452",
   "numpy": "2.5.3",
   "platform": "Linux-6.18.44-fc-v165-x86_64-with-glibc2.39",
   "python": "3.13.16",
-  "reason": "Initial Phase 1 baseline for model sign-off (recorded 23 Oct 2026 NIFTY snapshot)",
+  "reason": "Add Phase 3 strategies section (recommender, projector, hedge finder)",
   "scipy": "1.18.1",
-  "updated": "2026-10-27T10:21:21+00:00"
+  "updated": "2026-10-27T14:02:33+00:00"
  },
  "values": {
   "black76": {
@@ -5270,6 +5271,38 @@
    "var/var99": 25423.07147402851,
    "var/worst_date": "2025-05-12",
    "var/worst_pnl": -75918.7302935559
+  },
+  "strategies": {
+   "bull_call_22500_22700/breakeven": 22582.77872085764,
+   "bull_call_22500_22700/capital_required": 39978.14760983132,
+   "bull_call_22500_22700/entry_charges": 62.04593046299999,
+   "bull_call_22500_22700/margin": 34605.60167936832,
+   "bull_call_22500_22700/market_expected": -89.07762634622077,
+   "bull_call_22500_22700/market_prob_profit": 0.4232339485024101,
+   "bull_call_22500_22700/max_loss": 5372.545930463,
+   "bull_call_22500_22700/max_profit": 7607.363261873141,
+   "bull_call_22500_22700/model_expected": -191.30849313281078,
+   "bull_call_22500_22700/model_prob_profit": 0.4158871761196153,
+   "bull_call_22500_22700/premium": 5310.5,
+   "bull_call_22500_22700/user_expected": -47.84535586436414,
+   "bull_call_22500_22700/user_prob_profit": 0.42540753492795164,
+   "hedge/before_es95": 57457.71638705987,
+   "hedge/best": "Buy 2 lots of the 22,900 call",
+   "hedge/best_es95": 32307.999678621985,
+   "recommend_20k_user_22900/1/capital": 9673.899357244,
+   "recommend_20k_user_22900/1/expected": 31607.966906632337,
+   "recommend_20k_user_22900/1/label": "Long call 22,900 27 Oct",
+   "recommend_20k_user_22900/1/lots": 4,
+   "recommend_20k_user_22900/2/capital": 5313.7068242035,
+   "recommend_20k_user_22900/2/expected": 12729.783229594763,
+   "recommend_20k_user_22900/2/label": "Long call 22,700 27 Oct",
+   "recommend_20k_user_22900/2/lots": 1,
+   "recommend_20k_user_22900/3/capital": 9391.863191617,
+   "recommend_20k_user_22900/3/expected": 11633.42255198669,
+   "recommend_20k_user_22900/3/label": "Long strangle 22,100/22,900 27 Oct",
+   "recommend_20k_user_22900/3/lots": 2,
+   "recommend_20k_user_22900/considered": 94,
+   "recommend_20k_user_22900/feasible": 4
   },
   "synthetic_surface": {
    "2026-11-23/forward": 22560.001436957657,
