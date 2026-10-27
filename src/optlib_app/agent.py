@@ -109,6 +109,31 @@ TOOLS = [
 ]
 
 
+POSITIONS_SCHEMA = {"type": "array", "items": {"type": "object", "properties": {
+    "underlying": {"type": "string"}, "expiry": {"type": "string"}, "strike": {"type": "number"},
+    "option_type": {"type": "string", "enum": ["call", "put"]}, "lots": {"type": "number"}},
+    "required": ["expiry", "strike", "option_type", "lots"]}}
+
+TOOLS += [
+    {
+        "name": "risk_summary",
+        "description": "Book risk: 1-day 99% VaR and 97.5% Expected Shortfall (historical simulation, full "
+                       "revaluation), biggest contributors to ES, VaR backtest (exceptions, Kupiec/Christoffersen "
+                       "p-values, traffic light), stress tests (real historical days and hypothetical shocks), "
+                       "limit utilisation and Greeks by expiry.",
+        "input_schema": {"type": "object", "properties": {"positions": POSITIONS_SCHEMA}, "required": ["positions"]},
+    },
+    {
+        "name": "pnl_explain",
+        "description": "Explain a book's actual P&L between two trading days from NSE end-of-day prices: delta, gamma, "
+                       "vega, theta, cross and rate effects, and the unexplained remainder with its status.",
+        "input_schema": {"type": "object", "properties": {
+            "positions": POSITIONS_SCHEMA, "day0": {"type": "string", "description": "YYYY-MM-DD"},
+            "day1": {"type": "string", "description": "YYYY-MM-DD"}}, "required": ["positions", "day0", "day1"]},
+    },
+]
+
+
 class AgentUnavailable(Exception):
     pass
 
@@ -260,6 +285,23 @@ class OptionPricingAgent:
                     "validation": out["validation"]}
         if name == "book_risk":
             return svc.book(args["positions"])
+        if name == "risk_summary":
+            r = svc.risk(args["positions"])
+            v, bt = r["var"], r["backtest"]
+            return {"status": r["status"], "as_of": r["as_of"], "history_last_date": r["history_last_date"],
+                    "book_totals": r["book"]["totals"], "by_expiry": r["by_expiry"],
+                    "var_99_1d": v["var"], "es_97_5_1d": v["es"], "var_window_days": v["window"],
+                    "var_worst_day": v["worst"], "es_contributions": v["es_contributions"],
+                    "backtest": {k: bt.get(k) for k in ("exceptions", "days", "expected", "kupiec_p",
+                                                        "christoffersen_p", "traffic_light", "error")},
+                    "worst_stress": [{k: s[k] for k in ("scenario", "kind", "index_move", "vol_mult", "pnl")}
+                                     for s in r["stress"][:5]],
+                    "limits": r["limits"]}
+        if name == "pnl_explain":
+            e = svc.pnl_explain(args["positions"], args["day0"], args["day1"])
+            return {k: e[k] for k in ("day0", "day1", "totals", "unexplained_share", "status", "notes")} | {
+                "legs": [{k: l[k] for k in ("label", "actual", "delta", "gamma", "vega", "theta", "unexplained",
+                                            "vol0", "vol1", "forward0", "forward1")} for l in e["legs"]]}
         if name == "scenario_grid":
             return svc.scenarios(args["positions"], args.get("spot_shocks"), args.get("vol_shocks"))
         raise ServiceError(f"unknown tool {name}")
@@ -272,7 +314,7 @@ class OptionPricingAgent:
                 continue
             if "validation" in r.output:
                 out.append(r.output["validation"]["status"])
-            elif r.name == "book_risk":
+            elif r.name in ("book_risk", "risk_summary", "pnl_explain"):
                 out.append(r.output.get("status", "PASS"))
         return out
 

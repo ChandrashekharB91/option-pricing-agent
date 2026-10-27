@@ -17,6 +17,7 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | FastAPI backend, Python client | Done |
 | Orchestrator and validator agents | Done; provider-neutral (Claude or any OpenAI-compatible API), tested with scripted models |
 | Streamlit dashboard: market & smile, pricer, book risk, agent chat | Done |
+| Risk: historical VaR/ES, backtest, stress tests, limits, P&L explain, HTML risk report | Done (Phase 2); limits are placeholders until risk sets them |
 
 ## Run the app (local)
 
@@ -44,6 +45,10 @@ outside market hours. `DATA_MODE=live` uses Upstox and FBIL; surfaces are cached
 | `POST /price` | price, Greeks (per unit and position), inputs, validation report |
 | `POST /book` | per-position and total value and Greeks, worst validation status |
 | `POST /scenarios` | spot x vol P&L grid, full revaluation |
+| `POST /risk` | VaR/ES, ES contributions, backtest, stress tests, limit checks, Greeks by expiry |
+| `GET /risk/eod_days` | days with NSE end-of-day prices available for P&L explain |
+| `POST /risk/pnl_explain` | day-on-day P&L split into delta, gamma, vega, theta, cross, rate, unexplained |
+| `POST /risk/report` | self-contained HTML risk report (charts, tables, commentary) |
 | `POST /agent/ask` | agent answer, tool calls, independent validator review, release status |
 
 From a notebook: `from optlib_app.client import PricingClient; PricingClient().price("2026-10-27", 22500, "call", lots=2)`.
@@ -66,6 +71,29 @@ deterministic FAIL or validator FAIL withholds the answer.
 After setting it, run `python scripts/check_llm.py`: it sends one pricing question through the full agent on
 the recorded snapshot and reports whether the model called the tool correctly, kept its numbers grounded, and
 what the validator said.
+
+## Risk management (Phase 2)
+
+All risk numbers come from full Black-76 revaluation of the book, not Greek approximations.
+
+- **VaR and ES.** Historical simulation over the last N days (default 500) of index and India VIX closes.
+  Each day's index log return and relative VIX change is applied to every position (sticky strike, one day of
+  time decay). 1-day VaR at 99% and ES at 97.5% (the FRTB pair), with each position's contribution to ES.
+  History stops the day before the pricing date, so there is no look-ahead.
+- **Backtest.** VaR recomputed each day over the last 250 days and compared with that day's P&L:
+  exception count, Kupiec (frequency) and Christoffersen (clustering) tests, Basel traffic light.
+- **Stress tests.** Real market days replayed on today's book (COVID crash and rebound, 2024 election
+  results, Budget 2021, Russia-Ukraine, 2019 tax cut, Aug 2015 sell-off) plus hypothetical spot and vol shocks.
+- **Limits.** Net delta, gamma, vega, theta, VaR and worst stress against `config/risk_limits.json`
+  (amber from 80%, red above 100%). The values shipped are placeholders for the risk team to set.
+- **P&L explain.** Uses NSE F&O end-of-day bhavcopy closes on two days: each leg's vol is implied from its
+  close, the forward from put-call parity on traded strikes. Actual P&L is split into delta, gamma, vega, theta,
+  cross (vanna, volga), rate and unexplained; WARN above 5% unexplained, FAIL above 15%.
+- **Report.** One HTML file with every chart and table, downloadable from the dashboard or `POST /risk/report`.
+
+Data: Upstox historical daily candles (public, no token) for index and India VIX history, cached to CSV;
+NSE bhavcopy files from nsearchives. Replay mode uses the recorded files in `tests/fixtures`.
+Not yet included: exchange SPAN margin (needs NSE SPAN risk-parameter files).
 
 ## Walkthrough notebook
 

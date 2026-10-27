@@ -1,0 +1,9 @@
+{
+  "delta_units": 500,
+  "gamma": 1.0,
+  "vega_rs": 50000,
+  "theta_rs": 50000,
+  "var99_rs": 500000,
+  "stress_rs": 1500000,
+  "warn_at": 0.8
+}

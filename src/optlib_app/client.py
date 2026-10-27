@@ -58,5 +58,21 @@ class PricingClient:
         return self._req("POST", "/scenarios", json={"positions": positions, "spot_shocks": spot_shocks,
                                                      "vol_shocks": vol_shocks})
 
+    def risk(self, positions: list[dict], window: int = 500):
+        return self._req("POST", "/risk", json={"positions": positions, "window": window})
+
+    def eod_days(self):
+        return self._req("GET", "/risk/eod_days")["days"]
+
+    def pnl_explain(self, positions: list[dict], day0: str, day1: str):
+        return self._req("POST", "/risk/pnl_explain", json={"positions": positions, "day0": day0, "day1": day1})
+
+    def risk_report(self, positions: list[dict], day0: Optional[str] = None, day1: Optional[str] = None) -> str:
+        resp = self.session.post(f"{self.base_url}/risk/report", json={"positions": positions, "day0": day0,
+                                                                         "day1": day1}, timeout=self.timeout)
+        if resp.status_code >= 400:
+            raise PricingAPIError(resp.status_code, resp.text[:300])
+        return resp.text
+
     def ask(self, question: str, history: Optional[list] = None):
         return self._req("POST", "/agent/ask", json={"question": question, "history": history or []})

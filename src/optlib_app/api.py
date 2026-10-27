@@ -11,6 +11,7 @@ from datetime import date
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
 from optlib.data.upstox import UpstoxError
@@ -66,6 +67,22 @@ class ScenarioRequest(BookRequest):
     vol_shocks: Optional[list[float]] = Field(default=None, description="absolute, e.g. 0.02 for +2 vol points")
 
 
+class RiskRequest(BookRequest):
+    window: int = Field(default=500, ge=100, le=2500, description="historical days for VaR")
+    var_level: float = Field(default=0.99, gt=0.5, lt=1)
+    es_level: float = Field(default=0.975, gt=0.5, lt=1)
+
+
+class ExplainRequest(BookRequest):
+    day0: date
+    day1: date
+
+
+class ReportRequest(BookRequest):
+    day0: Optional[date] = None
+    day1: Optional[date] = None
+
+
 class AskRequest(BaseModel):
     question: str = Field(min_length=3)
     history: list[dict] = Field(default_factory=list)
@@ -108,6 +125,26 @@ def book(req: BookRequest, svc: PricingService = Depends(get_service)):
 @app.post("/scenarios")
 def scenarios(req: ScenarioRequest, svc: PricingService = Depends(get_service)):
     return _call(svc.scenarios, _positions(req), req.spot_shocks, req.vol_shocks)
+
+
+@app.post("/risk")
+def risk(req: RiskRequest, svc: PricingService = Depends(get_service)):
+    return _call(svc.risk, _positions(req), req.window, req.var_level, req.es_level)
+
+
+@app.get("/risk/eod_days")
+def eod_days(svc: PricingService = Depends(get_service)):
+    return {"days": svc.eod_days(), "data_mode": svc.mode}
+
+
+@app.post("/risk/pnl_explain")
+def pnl_explain(req: ExplainRequest, svc: PricingService = Depends(get_service)):
+    return _call(svc.pnl_explain, _positions(req), req.day0, req.day1)
+
+
+@app.post("/risk/report", response_class=HTMLResponse)
+def risk_report(req: ReportRequest, svc: PricingService = Depends(get_service)):
+    return HTMLResponse(_call(svc.risk_report, _positions(req), req.day0, req.day1))
 
 
 @app.post("/agent/ask")

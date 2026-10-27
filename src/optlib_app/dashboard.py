@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from optlib_app import charts
 from optlib_app.client import PricingAPIError, PricingClient
 
 CALL, PUT, ACCENT, GREY = "#2563eb", "#ea580c", "#7c3aed", "#6b7280"
@@ -72,7 +73,8 @@ expiry_rows = ov["expiries"]
 expiry_ids = [e["expiry"] for e in expiry_rows]
 lot = ov["lot_size"]
 
-tab_market, tab_price, tab_book, tab_agent = st.tabs(["Market & smile", "Pricer", "Book risk", "Ask the agent"])
+tab_market, tab_price, tab_book, tab_risk, tab_agent = st.tabs(
+    ["Market & smile", "Pricer", "Book risk", "Risk (VaR, stress, P&L)", "Ask the agent"])
 
 # ------------------------------------------------------------------ market
 with tab_market:
@@ -191,6 +193,100 @@ with tab_book:
             st.plotly_chart(heat, use_container_width=True)
         except PricingAPIError as exc:
             show_error(exc)
+
+# ------------------------------------------------------------------ risk (phase 2)
+with tab_risk:
+    st.caption("Uses the book from the **Book risk** tab. VaR and ES by historical simulation with full revaluation; "
+               "stress tests replay real market days and hypothetical shocks; P&L explain uses NSE end-of-day prices.")
+    positions = [dict(underlying=underlying, **row) for row in book.dropna().to_dict("records")]
+    c = st.columns([1, 1, 2])
+    window = c[0].select_slider("VaR history (days)", options=[250, 500, 750, 1000, 1500], value=500)
+    run = c[1].button("Run risk", type="primary")
+    if run:
+        st.session_state["risk"] = None
+        try:
+            st.session_state["risk"] = client.risk(positions, window)
+        except PricingAPIError as exc:
+            show_error(exc)
+    r = st.session_state.get("risk")
+    if r:
+        v, bt = r["var"], r["backtest"]
+        m = st.columns(6)
+        m[0].metric("1-day VaR 99%", f"₹{v['var']:,.0f}")
+        m[1].metric("ES 97.5%", f"₹{v['es']:,.0f}")
+        m[2].metric("Worst day in window", f"₹{v['worst']['pnl']:,.0f}", v["worst"]["date"], delta_color="off")
+        m[3].metric("Worst stress", f"₹{r['stress'][0]['pnl']:,.0f}", r["stress"][0]["scenario"][:28],
+                    delta_color="off")
+        m[4].metric("Backtest exceptions", f"{bt.get('exceptions', '-')} / {bt.get('days', '-')}",
+                    f"traffic light {bt.get('traffic_light', 'n/a')}", delta_color="off")
+        m[5].markdown(f"Risk status<br>{badge(r['status'])}", unsafe_allow_html=True)
+        st.caption(f"History through {r['history_last_date']} (no look-ahead into the pricing day) · "
+                   f"window {v['first_date']} to {v['last_date']}")
+
+        sub = st.tabs(["Limits & Greeks", "VaR & ES", "Backtest", "Stress tests", "P&L explain", "Report"])
+        with sub[0]:
+            st.plotly_chart(charts.limits_bar(r["limits"]), use_container_width=True)
+            st.caption("Limits are placeholders in config/risk_limits.json; the risk team sets them.")
+            st.dataframe(pd.DataFrame(r["by_expiry"]).style.format(
+                {"value": "{:,.0f}", "delta": "{:,.1f}", "gamma": "{:.4f}", "vega": "{:,.0f}", "theta": "{:,.0f}"}),
+                hide_index=True, use_container_width=True)
+        with sub[1]:
+            left, right = st.columns([3, 2])
+            left.plotly_chart(charts.var_histogram(v), use_container_width=True)
+            right.plotly_chart(charts.contributions_bar(v), use_container_width=True)
+            right.caption("Average P&L of each position on the worst 2.5% of days; red adds to the loss, "
+                          "green offsets it. The bars add up to ES.")
+            st.caption(v["method"])
+        with sub[2]:
+            if "exceptions" in bt:
+                st.plotly_chart(charts.backtest_chart(bt), use_container_width=True)
+                st.markdown(f"Kupiec (frequency) p = **{bt['kupiec_p']:.2f}** · Christoffersen (clustering) "
+                            f"p = **{bt['christoffersen_p']:.2f}** · values below 0.05 reject the model. "
+                            f"_{bt['note']}._")
+            else:
+                st.info(bt.get("error", "backtest unavailable"))
+        with sub[3]:
+            st.plotly_chart(charts.stress_bar(r["stress"]), use_container_width=True)
+            st.dataframe(pd.DataFrame([{k: x[k] for k in ("scenario", "kind", "index_move", "vol_mult", "pnl")}
+                                       for x in r["stress"]]).style.format(
+                {"index_move": "{:+.2%}", "vol_mult": "x{:.2f}", "pnl": "{:,.0f}"}), hide_index=True,
+                use_container_width=True)
+        with sub[4]:
+            days = client.eod_days()
+            if days:
+                cc = st.columns(3)
+                d0 = cc[0].selectbox("From close of", days, index=0)
+                d1 = cc[1].selectbox("To close of", days, index=len(days) - 1)
+            else:
+                cc = st.columns(3)
+                d0 = cc[0].date_input("From close of").isoformat()
+                d1 = cc[1].date_input("To close of").isoformat()
+            if cc[2].button("Explain P&L"):
+                try:
+                    e = client.pnl_explain(positions, d0, d1)
+                    st.plotly_chart(charts.pnl_waterfall(e), use_container_width=True)
+                    st.dataframe(pd.DataFrame(e["legs"])[["label", "close0", "close1", "vol0", "vol1", "actual", "delta",
+                                                          "gamma", "vega", "theta", "cross", "unexplained"]].style.format(
+                        {"close0": "{:,.2f}", "close1": "{:,.2f}", "vol0": "{:.2%}", "vol1": "{:.2%}",
+                         **{k: "{:,.0f}" for k in ("actual", "delta", "gamma", "vega", "theta", "cross",
+                                                   "unexplained")}}), hide_index=True, use_container_width=True)
+                    for n in e["notes"]:
+                        st.caption(n)
+                except PricingAPIError as exc:
+                    show_error(exc)
+        with sub[5]:
+            st.write("A self-contained HTML report of everything above (charts load Plotly from its CDN).")
+            days = client.eod_days()
+            if st.button("Build report"):
+                try:
+                    html_doc = client.risk_report(positions, days[0] if len(days) > 1 else None,
+                                                  days[-1] if len(days) > 1 else None)
+                    st.download_button("Download risk report (HTML)", html_doc, file_name="risk_report.html",
+                                       mime="text/html")
+                except PricingAPIError as exc:
+                    show_error(exc)
+    else:
+        st.info("Press **Run risk** to compute VaR, ES, the backtest, stress tests and limits for the book.")
 
 # ------------------------------------------------------------------ agent
 with tab_agent:

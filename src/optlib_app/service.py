@@ -25,6 +25,11 @@ from optlib.data.upstox import UNDERLYINGS, UpstoxSource
 from optlib.pricing import price_option
 from optlib.surface import VolSurface, build_surface
 from optlib.validator import validate
+from optlib.data.bhavcopy import load_bhavcopy, parse_rows
+from optlib.data.history import History, load_history
+from optlib.pnl_explain import explain
+from optlib.risk import (Leg, Limits, backtest, check_limits, greeks_by_expiry, historical_scenarios, stress_tests,
+                         var_es)
 
 from .config import Settings
 
@@ -84,6 +89,8 @@ class PricingService:
         self._fbil = None
         self._curves: dict = {}
         self._surfaces: dict = {}
+        self._history = None
+        self._bhav: dict = {}
 
     # data ---------------------------------------------------------------------
     @property
@@ -274,3 +281,83 @@ class PricingService:
         return _clean({"spot_shocks": spot_shocks, "vol_shocks": vol_shocks, "pnl": grid.tolist(),
                        "method": "full revaluation, sticky strike, time held fixed; P&L in Rs",
                        "worst": float(grid.min()), "best": float(grid.max())})
+
+    # ------------------------------------------------------------------ risk (phase 2)
+    def history(self) -> History:
+        with self._lock:
+            if self._history is None:
+                s = self.settings
+                self._history = (History.from_csv(s.history_path) if self.mode == "replay"
+                                 else load_history(s.cache_dir, end=datetime.now(IST).date()))
+            return self._history
+
+    def eod_days(self) -> list[str]:
+        """Trading days with end-of-day F&O data on hand (replay) for P&L explain."""
+        return sorted(self.settings.bhavcopy_files) if self.mode == "replay" else []
+
+    def bhavcopy(self, day: date):
+        key = day.isoformat()
+        with self._lock:
+            if key not in self._bhav:
+                if self.mode == "replay":
+                    path = self.settings.bhavcopy_files.get(key)
+                    if path is None:
+                        raise ServiceError(f"replay data has end-of-day files for {', '.join(self.eod_days())} only")
+                    self._bhav[key] = parse_rows(path.read_text(encoding="utf-8"))
+                else:
+                    try:
+                        self._bhav[key] = load_bhavcopy(day, self.settings.cache_dir)
+                    except RuntimeError as exc:
+                        raise ServiceError(str(exc)) from exc
+            return self._bhav[key]
+
+    def _results(self, positions: list[dict]) -> list[dict]:
+        out = []
+        for p in map(Position.from_dict, positions):
+            out.append(self.price(p.underlying, p.expiry, p.strike, p.option_type, p.lots)["result"])
+        return out
+
+    def risk(self, positions: list[dict], window: int = 500, var_level: float = 0.99, es_level: float = 0.975,
+             test_days: int = 250) -> dict:
+        """Book Greeks by expiry, VaR/ES with contributions, backtest, stress tests and limit utilisation."""
+        book = self.book(positions)
+        legs = [Leg.from_result(r) for r in self._results(positions)]
+        hist = self.history().before(self.now().date())  # no look-ahead: history up to the previous close
+        try:
+            scen = historical_scenarios(hist, [l.underlying for l in legs], window)
+        except (ValueError, KeyError) as exc:
+            raise ServiceError(f"history: {exc}") from exc
+        v = var_es(legs, scen, var_level, es_level)
+        try:
+            bt = backtest(legs, hist, window, test_days, var_level).to_dict()
+        except ValueError as exc:
+            bt = {"error": str(exc)}
+        st = stress_tests(legs, hist)
+        limits = check_limits(book["totals"], v.var, min(r["pnl"] for r in st), Limits.load(self.settings.limits_path))
+        states = [book["status"]] + [l["status"] for l in limits]
+        light = bt.get("traffic_light")
+        states.append({"green": "PASS", "amber": "WARN", "red": "FAIL"}.get(light, "WARN"))
+        status = "FAIL" if "FAIL" in states else ("WARN" if "WARN" in states else "PASS")
+        return _clean({"as_of": self.now(), "data_mode": self.mode, "status": status, "book": book,
+                       "by_expiry": greeks_by_expiry(book["positions"]), "var": v.to_dict(), "backtest": bt,
+                       "stress": st, "limits": limits, "history_last_date": hist.dates[-1]})
+
+    def pnl_explain(self, positions: list[dict], day0, day1) -> dict:
+        d0, d1 = _to_date(day0), _to_date(day1)
+        try:
+            e = explain(positions, self.bhavcopy(d0), self.bhavcopy(d1), self.curve(d0), self.curve(d1))
+        except ValueError as exc:
+            raise ServiceError(str(exc)) from exc
+        return _clean(e.to_dict())
+
+    def risk_report(self, positions: list[dict], day0=None, day1=None) -> str:
+        from .report import render_risk_report
+
+        risk = self.risk(positions)
+        pnl = None
+        if day0 and day1:
+            try:
+                pnl = self.pnl_explain(positions, day0, day1)
+            except ServiceError as exc:
+                pnl = {"error": str(exc)}
+        return render_risk_report(risk, pnl)
