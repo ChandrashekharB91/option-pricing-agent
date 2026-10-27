@@ -121,6 +121,8 @@ class ProjectRequest(BaseModel):
 class HedgeRequest(BookRequest):
     budget: float = Field(gt=0, description="rupees for premium plus extra margin")
     view: ViewIn = Field(default_factory=lambda: ViewIn(source="model"))
+    rank_by: Literal["worst_case", "es95", "per_rupee"] = "worst_case"
+    top: int = Field(default=3, ge=1, le=10)
 
 
 class AskRequest(BaseModel):
@@ -192,7 +194,10 @@ def strategy_meta(underlying: str = "NIFTY", svc: PricingService = Depends(get_s
     from optlib.recommender import DISCLAIMER, OBJECTIVES, VIEW_SOURCES
     from optlib.strategies import FAMILIES
 
+    from optlib.recommender import HEDGE_RANKS
+
     return {"families": FAMILIES, "objectives": OBJECTIVES, "view_sources": VIEW_SOURCES, "disclaimer": DISCLAIMER,
+            "hedge_ranks": HEDGE_RANKS,
             "expiries": [d.isoformat() for d in _call(svc.expiries, underlying)]}
 
 
@@ -210,7 +215,7 @@ def strategy_project(req: ProjectRequest, svc: PricingService = Depends(get_serv
 
 @app.post("/strategy/hedge")
 def strategy_hedge(req: HedgeRequest, svc: PricingService = Depends(get_service)):
-    return _call(svc.hedge, _positions(req), req.budget, req.view.model_dump())
+    return _call(svc.hedge, _positions(req), req.budget, req.view.model_dump(), "NIFTY", req.top, req.rank_by)
 
 
 @app.post("/agent/ask")

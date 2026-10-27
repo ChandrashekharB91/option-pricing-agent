@@ -441,31 +441,48 @@ with tab_strat:
             st.plotly_chart(charts.pnl_heatmap(proj["grid"]), use_container_width=True)
 
     with hedge_tab:
-        st.caption("Uses the book from the **Book risk** tab. Searches futures, options and spreads (1 to 3 lots) "
-                   "that most reduce the book's expected shortfall at the horizon, within your cash budget.")
-        hb = st.number_input("Hedge budget (₹, premium + extra margin)", min_value=1000.0, value=50000.0,
+        st.caption("Uses the book from the **Book risk** tab. Searches futures, single calls or puts, call + put "
+                   "pairs (both wings, unequal lots allowed) and spreads, 1 to 3 lots each, within your cash budget. "
+                   "Each hedge is judged on the loss if the index rises and if it falls (3-sd moves to expiry).")
+        h1, h2 = st.columns(2)
+        hb = h1.number_input("Hedge budget (₹, premium + extra margin)", min_value=1000.0, value=50000.0,
                              step=5000.0, format="%.0f")
+        rank_by = h2.selectbox("Choose hedges by", list(meta["hedge_ranks"]), format_func=meta["hedge_ranks"].get)
         if st.button("Find hedges", type="primary"):
             positions = [dict(underlying=underlying, **row) for row in book.dropna().to_dict("records")]
             try:
-                st.session_state["hedge"] = client.hedge(positions, hb, view)
+                st.session_state["hedge"] = client.hedge(positions, hb, view, rank_by, top=5)
             except PricingAPIError as exc:
                 show_error(exc)
         hg = st.session_state.get("hedge")
         if hg:
             bf = hg["before"]
-            st.markdown(f"Book today: ES95 ₹{bf['es95']:,.0f}, loss in a 3-sd move ₹{bf['stress_loss']:,.0f}, "
-                        f"delta {bf['greeks']['delta']:,.1f}, vega ₹{bf['greeks']['vega']:,.0f} per vol pt "
-                        f"({hg['view']} view).")
+            st.markdown(f"**Book today:** loss ₹{bf['loss_if_up']:,.0f} if the index rises 3 sd, "
+                        f"₹{bf['loss_if_down']:,.0f} if it falls 3 sd; ES95 ₹{bf['es95']:,.0f} ({hg['view']} view); "
+                        f"delta {bf['greeks']['delta']:,.1f}, vega ₹{bf['greeks']['vega']:,.0f} per vol pt.")
             if hg["hedges"]:
-                st.plotly_chart(charts.hedge_bar(hg), use_container_width=True)
                 st.dataframe(pd.DataFrame([{
-                    "hedge": x["label"], "cash needed": x["cash_needed"], "ES95 after": x["es95"],
-                    "3-sd loss after": x["stress_loss"], "delta after": x["greeks"]["delta"],
-                    "vega after": x["greeks"]["vega"], "expected P&L after": x["expected"]} for x in hg["hedges"]])
-                    .style.format({c: "{:,.0f}" for c in ("cash needed", "ES95 after", "3-sd loss after",
-                                                          "vega after", "expected P&L after")} | {"delta after": "{:,.1f}"}),
+                    "#": n, "hedge": x["label"], "cash needed": x["cash_needed"], "loss if up": x["loss_if_up"],
+                    "loss if down": x["loss_if_down"], "ES95 after": x["es95"], "delta after": x["greeks"]["delta"],
+                    "vega after": x["greeks"]["vega"], "expected P&L after": x["expected"]}
+                    for n, x in enumerate(hg["hedges"], 1)]).style.format(
+                    {c: "{:,.0f}" for c in ("cash needed", "loss if up", "loss if down", "ES95 after", "vega after",
+                                            "expected P&L after")} | {"delta after": "{:,.1f}"}),
                     hide_index=True, use_container_width=True)
+                pick = st.selectbox("Inspect hedge", range(len(hg["hedges"])),
+                                    format_func=lambda i: f"{i + 1}. {hg['hedges'][i]['label']}")
+                x = hg["hedges"][pick]
+                left, right = st.columns([3, 2])
+                left.plotly_chart(charts.hedge_payoff(hg, pick), use_container_width=True)
+                right.markdown("**Trades to place**")
+                right.dataframe(pd.DataFrame(x["legs"]).rename(columns={"price": "fill price"}).style.format(
+                    {"fill price": "{:,.2f}", "bid": "{:,.2f}", "ask": "{:,.2f}"}), hide_index=True,
+                    use_container_width=True)
+                mtxt = (f"margin released ₹{-x['extra_margin']:,.0f}" if x["extra_margin"] < 0
+                        else f"extra margin ₹{x['extra_margin']:,.0f}")
+                right.caption(f"Premium ₹{x['premium']:,.0f} · {mtxt} · charges ₹{x['charges']:,.0f}. "
+                              f"{hg['note']}")
+                st.plotly_chart(charts.hedge_bar(hg), use_container_width=True)
             else:
                 st.warning("No hedge fits this budget.")
 

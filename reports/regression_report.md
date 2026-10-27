@@ -1,6 +1,6 @@
 # Regression report: PASS
 
-Run 2026-10-27T14:05:36+00:00 at commit ef68452; golden values from 2026-10-27T14:02:33+00:00 (Add Phase 3 strategies section (recommender, projector, hedge finder)).
+Run 2026-10-27T14:37:43+00:00 at commit 60ca0da; golden values from 2026-10-27T14:37:43+00:00 (Hedge finder: call+put pairs, two-sided 3-sd stress, rank by worst case).
 
 ## Golden values
 
@@ -14,7 +14,7 @@ Run 2026-10-27T14:05:36+00:00 at commit ef68452; golden values from 2026-10-27T1
 | pricing | prices, Greeks and validator verdicts for 6 NIFTY options | 144 | 0 | 0.00e+00 | PASS |
 | book | sample book value and Greeks | 6 | 0 | 0.00e+00 | PASS |
 | risk | Phase 2: VaR, ES, backtest, stress, P&L explain on the sample book | 23 | 0 | 0.00e+00 | PASS |
-| strategies | Phase 3: recommender, P&L projector and hedge finder | 30 | 0 | 0.00e+00 | PASS |
+| strategies | Phase 3: recommender, P&L projector and hedge finder | 34 | 0 | 0.00e+00 | PASS |
 
 ## Benchmark gates
 

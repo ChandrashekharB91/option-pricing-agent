@@ -138,13 +138,31 @@ def pnl_heatmap(grid: dict) -> go.Figure:
 
 
 def hedge_bar(h: dict) -> go.Figure:
-    rows = [("Book today", h["before"]["es95"])] + [(x["label"], x["es95"]) for x in h["hedges"]]
-    fig = go.Figure(go.Bar(x=[r[1] for r in rows], y=[r[0] for r in rows], orientation="h",
-                           marker_color=[LOSS] + [GAIN] * (len(rows) - 1),
-                           text=[_rs(r[1]) for r in rows], textposition="outside",
-                           hovertemplate="%{y}: ES95 Rs %{x:,.0f}<extra></extra>"))
-    fig.update_layout(title="Expected shortfall (95%) at the horizon, before and after each hedge",
-                      xaxis_title="Rs", yaxis=dict(autorange="reversed"),
-                      xaxis_range=[0, 1.3 * max(r[1] for r in rows)],
-                      **{**LAYOUT, "height": 120 + 50 * len(rows), "margin": dict(t=50, b=40, l=300, r=60)})
+    """Loss if the index rises and if it falls (3-sd moves to expiry), before and after each hedge."""
+    rows = [("Book today", h["before"])] + [(x["label"], x) for x in h["hedges"]]
+    names = [r[0] for r in rows]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=names, x=[r[1]["loss_if_up"] for r in rows], orientation="h", name="if the index rises",
+                         marker_color=LOSS, text=[_rs(r[1]["loss_if_up"]) for r in rows], textposition="outside"))
+    fig.add_trace(go.Bar(y=names, x=[r[1]["loss_if_down"] for r in rows], orientation="h", name="if the index falls",
+                         marker_color=AMBER, text=[_rs(r[1]["loss_if_down"]) for r in rows], textposition="outside"))
+    top = max(max(r[1]["loss_if_up"], r[1]["loss_if_down"]) for r in rows)
+    fig.update_layout(title="Worst loss by expiry for a 3-sd move, before and after each hedge", barmode="group",
+                      xaxis_title="loss (Rs)", xaxis_range=[0, 1.3 * top], yaxis=dict(autorange="reversed"),
+                      legend=dict(orientation="h", y=-0.2),
+                      **{**LAYOUT, "height": 160 + 70 * len(rows), "margin": dict(t=50, b=60, l=420, r=60)})
+    return fig
+
+
+def hedge_payoff(h: dict, i: int) -> go.Figure:
+    """Book P&L at expiry across index levels: today's book vs the book with hedge i."""
+    F, x = h["curves"]["F"], h["hedges"][i]
+    fig = go.Figure()
+    fig.add_hline(y=0, line=dict(color=GREY, width=1))
+    fig.add_trace(go.Scatter(x=F, y=h["curves"]["before"], name="book today", line=dict(color=LOSS, width=2, dash="dot"),
+                             hovertemplate="index %{x:,.0f}: Rs %{y:,.0f}<extra>before</extra>"))
+    fig.add_trace(go.Scatter(x=F, y=x["curve_after"], name="with the hedge", line=dict(color=GAIN, width=3),
+                             hovertemplate="index %{x:,.0f}: Rs %{y:,.0f}<extra>after</extra>"))
+    fig.update_layout(title=f"Book P&L at expiry: {x['label']}", xaxis_title="NIFTY at expiry",
+                      yaxis_title="P&L from today (Rs)", legend=dict(orientation="h", y=-0.2), **{**LAYOUT, "height": 420})
     return fig

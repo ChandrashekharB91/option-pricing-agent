@@ -427,17 +427,17 @@ class PricingService:
             raise ServiceError(str(exc)) from exc
 
     def hedge(self, positions: list[dict], budget: float, view: Optional[dict] = None, underlying: str = "NIFTY",
-              top: int = 3) -> dict:
+              top: int = 3, rank_by: str = "worst_case") -> dict:
         if not positions:
             raise ServiceError("the book is empty")
         state = self.market_state(underlying, positions[0].get("expiry"))
         charges, margin = self._costs()
         try:
             out = find_hedges(state, positions, self._view(view or {"source": "model"}), charges, margin,
-                              float(budget), top)
+                              float(budget), top, rank_by)
         except (ValueError, NotQuoted) as exc:
             raise ServiceError(str(exc)) from exc
-        self._audit("hedge", {"positions": positions, "budget": budget, "view": view}, out)
+        self._audit("hedge", {"positions": positions, "budget": budget, "view": view, "rank_by": rank_by}, out)
         return _clean(out)
 
     def _audit(self, kind: str, request: dict, result: dict) -> None:

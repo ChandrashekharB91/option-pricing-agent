@@ -238,6 +238,14 @@ def hedge_candidates(state: MarketState) -> list[Strategy]:
             if kc:
                 out.append(Strategy(f"Buy {lots(n)} of the {kc:,.0f} call", "buy", "hedge",
                                     (StrategyLeg("call", 1, e, kc, n),)))
+        for zc in (0.5, 1.0):  # both wings at once: n lots of a call plus m lots of a put
+            for zp in (0.5, 1.0):
+                kc, kp = g.at(zc, "call"), g.at(-zp, "put")
+                if not (kc and kp):
+                    continue
+                for m in (1, 2, 3):
+                    out.append(Strategy(f"Buy {lots(n)} of the {kc:,.0f} call + {lots(m)} of the {kp:,.0f} put",
+                                        "buy", "hedge", (StrategyLeg("call", 1, e, kc, n), StrategyLeg("put", 1, e, kp, m))))
         for z, w in ((0.0, 1.0), (0.5, 1.0)):
             p1, p2, c1, c2 = g.at(-z, "put"), g.at(-z - w, "put"), g.at(z, "call"), g.at(z + w, "call")
             if p1 and p2 and p1 > p2:
@@ -249,10 +257,27 @@ def hedge_candidates(state: MarketState) -> list[Strategy]:
     return out
 
 
+HEDGE_RANKS = {
+    "worst_case": "smallest loss in a 3-sd move either way (protects both directions)",
+    "es95": "smallest expected shortfall (95%) under the chosen view",
+    "per_rupee": "most worst-case loss removed per rupee spent",
+}
+
+
+def _two_sided(F, pnl, F0) -> tuple[float, float]:
+    up, dn = pnl[F >= F0], pnl[F <= F0]
+    return float(-min(up.min(), 0.0)), float(-min(dn.min(), 0.0))
+
+
 def find_hedges(state: MarketState, positions: list[dict], view: View, charges: Charges, margin: MarginParams,
-                budget: float, top: int = 3) -> dict:
-    """Search single hedge trades (futures, options, spreads; 1 to 3 lots) that most reduce the book's ES95
-    at the horizon under the chosen view, within a cash budget for premium plus extra margin."""
+                budget: float, top: int = 3, rank_by: str = "worst_case") -> dict:
+    """Search hedge trades for a book: futures, single calls or puts, call + put pairs (unequal lots allowed)
+    and spreads, 1 to 3 lots each, within a cash budget for premium plus extra margin.
+
+    Each hedge is judged on the book's P&L at expiry for index moves up to 3 expected moves either way
+    (loss if the index rises, loss if it falls) and on ES95 at the horizon under the chosen view."""
+    if rank_by not in HEDGE_RANKS:
+        raise ValueError(f"rank_by must be one of {list(HEDGE_RANKS)}")
     book = []
     for p in positions:
         exp = p["expiry"] if isinstance(p["expiry"], date) else date.fromisoformat(str(p["expiry"])[:10])
@@ -268,10 +293,14 @@ def find_hedges(state: MarketState, positions: list[dict], view: View, charges: 
     t_rem = max(state.T - t_h, 0.0)
     d = build_views(state, t_h, view.target, view.vol)[view.source]
     units = state.lot_size
+    sd = state.atm_vol * math.sqrt(state.T)
+    Fx = state.forward * np.exp(np.linspace(-3 * sd, 3 * sd, 121))  # expiry stress grid
     base = _book_pnl(book, state, d.F, t_rem, units, view.iv_shift)
+    base_x = _book_pnl(book, state, Fx, 0.0, units)
     base_margin = estimate_margin(book, units, state, margin)["total"]
-    before = {"es95": _tail(base, d.p), "expected": float(np.sum(d.p * base)),
-              "stress_loss": _book_stress(book, state, units), "greeks": _legs_greeks(book, state, units),
+    up0, dn0 = _two_sided(Fx, base_x, state.forward)
+    before = {"es95": _tail(base, d.p), "expected": float(np.sum(d.p * base)), "loss_if_up": up0,
+              "loss_if_down": dn0, "worst_case": max(up0, dn0), "greeks": _legs_greeks(book, state, units),
               "margin": base_margin}
     results = []
     for h in hedge_candidates(state):
@@ -281,21 +310,34 @@ def find_hedges(state: MarketState, positions: list[dict], view: View, charges: 
             continue
         ch = sum(charges.order(l.instrument, l.side, e["price"], l.ratio * units)["total"]
                  for l, e in zip(h.legs, entries))
-        hp = _pnl_curve(h, state, entries, d.F, t_rem, view.iv_shift, units, charges) - ch
         premium = sum(l.side * e["price"] * l.ratio * units for l, e in zip(h.legs, entries) if l.instrument != "future")
         extra_margin = estimate_margin(book + list(h.legs), units, state, margin)["total"] - base_margin
         cash = max(premium, 0.0) + max(extra_margin, 0.0) + ch
         if cash > budget:
             continue
-        tot = base + hp
-        results.append({"hedge": h.to_dict(), "label": h.name, "legs": [l.label for l in h.legs],
+        tot = base + _pnl_curve(h, state, entries, d.F, t_rem, view.iv_shift, units, charges) - ch
+        tot_x = base_x + _pnl_curve(h, state, entries, Fx, 0.0, 0.0, units, charges) - ch
+        up, dn = _two_sided(Fx, tot_x, state.forward)
+        results.append({
+            "hedge": h.to_dict(), "label": h.name,
+            "legs": [{"leg": l.label, "price": e["price"], "bid": e["bid"], "ask": e["ask"]}
+                     for l, e in zip(h.legs, entries)],
             "cash_needed": cash, "premium": premium, "extra_margin": extra_margin, "charges": ch,
-            "es95": _tail(tot, d.p), "expected": float(np.sum(d.p * tot)),
-            "stress_loss": _book_stress(book + list(h.legs), state, units),
-            "greeks": _legs_greeks(book + list(h.legs), state, units)})
-    results.sort(key=lambda r: (r["es95"], r["cash_needed"]))
+            "es95": _tail(tot, d.p), "expected": float(np.sum(d.p * tot)), "loss_if_up": up, "loss_if_down": dn,
+            "worst_case": max(up, dn), "greeks": _legs_greeks(book + list(h.legs), state, units),
+            "curve_after": tot_x.tolist()})
+    key = {"worst_case": lambda r: (r["worst_case"], r["es95"], r["cash_needed"]),
+           "es95": lambda r: (r["es95"], r["worst_case"], r["cash_needed"]),
+           "per_rupee": lambda r: (-(before["worst_case"] - r["worst_case"]) / max(r["cash_needed"], 1.0),
+                                   r["worst_case"])}[rank_by]
+    results.sort(key=key)
+    best = results[:top]
+    for r in results[top:]:
+        r.pop("curve_after", None)
     return {"as_of": state.as_of.isoformat(), "expiry": state.expiry.isoformat(), "view": view.source,
-            "budget": budget, "before": before, "hedges": results[:top], "searched": len(results),
+            "budget": budget, "rank_by": rank_by, "rank_label": HEDGE_RANKS[rank_by], "before": before,
+            "hedges": best, "searched": len(results), "curves": {"F": Fx.tolist(), "before": base_x.tolist()},
+            "note": "Book P&L is measured from today's mid prices; hedges are entered at the bid/ask with all charges.",
             "disclaimer": DISCLAIMER}
 
 

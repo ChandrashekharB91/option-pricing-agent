@@ -89,9 +89,10 @@ class PricingClient:
         return self._req("POST", "/strategy/project", json={"legs": legs, "lots": lots, "view": view or {},
                                                             "underlying": underlying, "name": name})
 
-    def hedge(self, positions: list[dict], budget: float, view: Optional[dict] = None):
-        return self._req("POST", "/strategy/hedge", json={"positions": positions, "budget": budget,
-                                                          "view": view or {"source": "model"}})
+    def hedge(self, positions: list[dict], budget: float, view: Optional[dict] = None, rank_by: str = "worst_case",
+              top: int = 3):
+        return self._req("POST", "/strategy/hedge", json={"positions": positions, "budget": budget, "top": top,
+                                                          "view": view or {"source": "model"}, "rank_by": rank_by})
 
     def ask(self, question: str, history: Optional[list] = None):
         return self._req("POST", "/agent/ask", json={"question": question, "history": history or []})

@@ -277,8 +277,12 @@ def _strategies(svc) -> dict:
         out[f"bull_call_22500_22700/{v}_prob_profit"] = p["views"][v]["prob_profit"]
     h = svc.hedge(SAMPLE_BOOK, 100000)
     out["hedge/before_es95"] = h["before"]["es95"]
+    out["hedge/before_loss_if_up"] = h["before"]["loss_if_up"]
+    out["hedge/before_loss_if_down"] = h["before"]["loss_if_down"]
     out["hedge/best"] = h["hedges"][0]["label"]
     out["hedge/best_es95"] = h["hedges"][0]["es95"]
+    out["hedge/best_worst_case"] = h["hedges"][0]["worst_case"]
+    out["hedge/best_cash"] = h["hedges"][0]["cash_needed"]
     return out
 
 

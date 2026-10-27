@@ -179,10 +179,25 @@ def test_recommend_validation(state):
 
 def test_hedge_finder_cuts_tail(state):
     h = find_hedges(state, BOOK, View("model"), CH, MP, budget=100000)
-    assert h["hedges"] and h["disclaimer"] == DISCLAIMER
+    assert h["hedges"] and h["disclaimer"] == DISCLAIMER and h["rank_by"] == "worst_case"
     best = h["hedges"][0]
-    assert best["es95"] < h["before"]["es95"] and best["cash_needed"] <= 100000
-    assert "call" in best["label"] or "future" in best["label"]  # the short call drives the tail
+    assert best["worst_case"] < h["before"]["worst_case"] and best["cash_needed"] <= 100000
+    assert best["es95"] < h["before"]["es95"]
+    assert len(best["curve_after"]) == len(h["curves"]["F"]) == len(h["curves"]["before"])
+    cheap = find_hedges(state, BOOK, View("model"), CH, MP, budget=100000, rank_by="per_rupee")["hedges"][0]
+    assert cheap["cash_needed"] < best["cash_needed"]
+    with pytest.raises(ValueError):
+        find_hedges(state, BOOK, View("model"), CH, MP, budget=1000, rank_by="vibes")
+
+
+def test_hedge_finder_offers_call_and_put_together(state):
+    """A naked short straddle is exposed both ways: the best hedge buys a call AND a put (an iron butterfly)."""
+    h = find_hedges(state, BOOK[:2], View("model"), CH, MP, budget=50000)
+    b, best = h["before"], h["hedges"][0]
+    assert b["loss_if_up"] > 50000 and b["loss_if_down"] > 50000
+    kinds = {l["leg"].split()[-1] for l in best["legs"]}
+    assert kinds == {"call", "put"} and all(l["leg"].startswith("Buy") for l in best["legs"])
+    assert best["loss_if_up"] < 0.2 * b["loss_if_up"] and best["loss_if_down"] < 0.2 * b["loss_if_down"]
 
 
 # ------------------------------------------------------------------ service, API, agent
@@ -210,8 +225,9 @@ def test_strategy_api(svc):
                                                      "expiry": "2026-10-27"}], "lots": 2})
     assert p.status_code == 200 and p.json()["lots"] == 2
     assert p.json()["grid"]["times"] == ["now", "Fri 23 Oct close", "Mon 26 Oct close", "Tue 27 Oct close"]
-    h = c.post("/strategy/hedge", json={"positions": BOOK, "budget": 50000})
-    assert h.status_code == 200 and h.json()["hedges"]
+    h = c.post("/strategy/hedge", json={"positions": BOOK, "budget": 50000, "rank_by": "es95", "top": 5})
+    assert h.status_code == 200 and h.json()["rank_by"] == "es95" and len(h.json()["hedges"]) == 5
+    assert c.post("/strategy/hedge", json={"positions": BOOK, "budget": 50000, "rank_by": "x"}).status_code == 422
 
 
 class Scripted:

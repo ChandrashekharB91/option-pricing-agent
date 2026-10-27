@@ -9,16 +9,16 @@
    "live_surface": 141,
    "pricing": 144,
    "risk": 23,
-   "strategies": 30,
+   "strategies": 34,
    "synthetic_surface": 18
   },
-  "git_commit": "ef68452",
+  "git_commit": "60ca0da",
   "numpy": "2.5.3",
   "platform": "Linux-6.18.44-fc-v165-x86_64-with-glibc2.39",
   "python": "3.13.16",
-  "reason": "Add Phase 3 strategies section (recommender, projector, hedge finder)",
+  "reason": "Hedge finder: call+put pairs, two-sided 3-sd stress, rank by worst case",
   "scipy": "1.18.1",
-  "updated": "2026-10-27T14:02:33+00:00"
+  "updated": "2026-10-27T14:37:43+00:00"
  },
  "values": {
   "black76": {
@@ -5287,8 +5287,12 @@
    "bull_call_22500_22700/user_expected": -47.84535586436414,
    "bull_call_22500_22700/user_prob_profit": 0.42540753492795164,
    "hedge/before_es95": 57457.71638705987,
-   "hedge/best": "Buy 2 lots of the 22,900 call",
-   "hedge/best_es95": 32307.999678621985,
+   "hedge/before_loss_if_down": 27459.250000000007,
+   "hedge/before_loss_if_up": 121154.84406510403,
+   "hedge/best": "Buy 2 lots of the 22,700 call + 2 lots of the 22,300 put",
+   "hedge/best_cash": 20420.776742753,
+   "hedge/best_es95": 8983.52444233359,
+   "hedge/best_worst_case": 9079.070133850671,
    "recommend_20k_user_22900/1/capital": 9673.899357244,
    "recommend_20k_user_22900/1/expected": 31607.966906632337,
    "recommend_20k_user_22900/1/label": "Long call 22,900 27 Oct",

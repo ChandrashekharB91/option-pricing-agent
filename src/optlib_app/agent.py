@@ -175,11 +175,14 @@ TOOLS += [
     },
     {
         "name": "find_hedge",
-        "description": "Search futures and option trades (1 to 3 lots) that most reduce a book's expected shortfall "
-                       "within a cash budget; returns risk before and after each hedge.",
+        "description": "Search hedges for a book within a cash budget: futures, single calls or puts, call + put "
+                       "pairs (both wings, unequal lots allowed) and spreads, 1 to 3 lots. Returns the loss if the "
+                       "index rises and if it falls (3-sd moves), ES95, cost and Greeks before and after each hedge.",
         "input_schema": {"type": "object", "properties": {
             "positions": POSITIONS_SCHEMA, "budget": {"type": "number", "description": "rupees for premium + margin"},
-            "view": VIEW_SCHEMA}, "required": ["positions", "budget"]},
+            "view": VIEW_SCHEMA, "rank_by": {"type": "string", "enum": ["worst_case", "es95", "per_rupee"],
+                                             "description": "default worst_case: protect both directions"}},
+            "required": ["positions", "budget"]},
     },
 ]
 STRATEGY_TOOLS = ("recommend_strategies", "project_strategy", "find_hedge")
@@ -379,8 +382,10 @@ class OptionPricingAgent:
             src = (args.get("view") or {}).get("source", "blend")
             return _idea(r, src) | {"views": r["views"], "disclaimer": r["disclaimer"]}
         if name == "find_hedge":
-            r = svc.hedge(args["positions"], args["budget"], args.get("view"))
-            return {k: r[k] for k in ("as_of", "expiry", "view", "budget", "before", "hedges", "disclaimer")}
+            r = svc.hedge(args["positions"], args["budget"], args.get("view"), rank_by=args.get("rank_by", "worst_case"))
+            hedges = [{k: v for k, v in x.items() if k not in ("curve_after", "hedge")} for x in r["hedges"]]
+            return {k: r[k] for k in ("as_of", "expiry", "view", "budget", "rank_label", "before", "note",
+                                      "disclaimer")} | {"hedges": hedges}
         if name == "scenario_grid":
             return svc.scenarios(args["positions"], args.get("spot_shocks"), args.get("vol_shocks"))
         raise ServiceError(f"unknown tool {name}")
