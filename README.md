@@ -227,3 +227,23 @@ Every tool depends on the `MarketDataSource` interface, so Bloomberg can replace
 Every result is checked against QuantLib (`optlib.benchmark`) with the spec tolerances:
 price within max(₹0.01, 0.001% of price), Greeks within 0.01% relative.
 See `reports/quantlib_comparison.md`.
+
+### Regression suite (model sign-off)
+
+`python scripts/regression.py` recomputes about 5,200 frozen outputs and compares them with
+`tests/regression/golden_phase1.json`. The outputs cover:
+
+- the Black-76 grid and implied vols;
+- the FBIL curve;
+- forwards, QA, implied vols and SVI on the recorded NIFTY snapshot;
+- a synthetic two-expiry surface;
+- prices, Greeks and validator verdicts;
+- the sample book and its Phase 2 risk numbers.
+
+It also runs the QuantLib gates. It writes `reports/regression_report.md` and exits 1 on any difference beyond
+tolerance. The same checks run in `pytest` and in CI on every push.
+
+A deliberate model change that moves numbers needs
+`python scripts/regression.py --update --reason "what changed and why"`. That stamps the golden file and adds
+a line to `tests/regression/CHANGELOG.md`, which the reviewer approves in the pull request.
+Run the script before every demo.
