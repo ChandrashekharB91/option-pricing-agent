@@ -76,3 +76,25 @@ def load_bhavcopy(day: date, cache_dir: Path, symbols: Iterable[str] = INDEX_SYM
         cache_dir.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
     return parse_rows(path.read_text(encoding="utf-8"), symbols)
+
+
+def load_symbol_rows(day: date, cache_dir: Path, symbol: str = "NIFTY",
+                     fetch: Optional[Callable[[str], bytes]] = None) -> list[BhavRow]:
+    """One symbol's index F&O rows for a day, cached as a small gzip file (for multi-year backtests)."""
+    import gzip
+
+    cache_dir = Path(cache_dir)
+    path = cache_dir / f"bhav_{symbol.lower()}_{day:%Y%m%d}.csv.gz"
+    if not path.is_file():
+        blob = (fetch or _download)(URL.format(d=day))
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            text = z.read(z.namelist()[0]).decode("utf-8")
+        lines = text.splitlines()
+        keep = [lines[0]] + [l for l in lines[1:] if f",{symbol}," in l]
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with gzip.open(tmp, "wt", encoding="utf-8") as f:
+            f.write("\n".join(keep) + "\n")
+        tmp.replace(path)
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        return parse_rows(f.read(), {symbol})

@@ -149,6 +149,23 @@ losses or gains from decisions based on them.*
 The agent has matching tools (`recommend_strategies`, `project_strategy`, `find_hedge`) and always ends such
 answers with the disclaimer.
 
+### Backtest and calibration
+
+```powershell
+python scripts/fetch_bhavcopy.py --start 2024-07-08 --end 2026-10-23   # once, about 3 minutes, ~45 MB
+python scripts/backtest.py --start 2024-07-08 --end 2026-10-22          # about 5 minutes
+```
+
+The backtest rebuilds every trading day's market from NSE's end-of-day files, then runs every strategy through
+the projector. Each idea is settled at NIFTY's actual expiry close after charges. It reports:
+
+- calibration: predicted chance of profit against the share that actually won;
+- predicted against realised P&L, by strategy;
+- how ideas that passed the recommendation rule performed.
+
+The output is `reports/backtest_report.html` and `reports/backtest_summary.json`; per-trade rows go to
+`data/backtest/trades.csv.gz`.
+
 ## Walkthrough notebook
 
 `notebooks/01_pipeline_walkthrough.ipynb` follows one NIFTY chain through every step built so far (market data,
