@@ -31,8 +31,13 @@ python scripts/check_llm.py      # confirms the chosen model can run the agent
 uvicorn optlib_app.api:app
 
 # terminal 2: the dashboard (opens http://localhost:8501)
-streamlit run src/optlib_app/dashboard.py
+python -m streamlit run src/optlib_app/dashboard.py
 ```
+
+No administrator rights are needed. `.streamlit/config.toml` keeps the dashboard on this machine only
+(127.0.0.1), so Windows does not ask to allow it through the firewall; if a firewall prompt still appears,
+cancel it and the dashboard still works at http://localhost:8501. `python -m streamlit` also works where IT
+policy blocks `streamlit.exe` in the user's Scripts folder.
 
 `DATA_MODE=replay` (default) serves the recorded 23 Oct 2026 NIFTY snapshot, so everything works offline and
 outside market hours. `DATA_MODE=live` uses Upstox and FBIL; surfaces are cached for 60 seconds.
