@@ -168,3 +168,12 @@ def test_list_models_reads_openai_compatible_listing():
 
     llm = OpenAICompatibleLLM("groq", "https://api.groq.com/openai/v1", "m", "k", session=Session())
     assert llm.list_models() == ["llama-3.1-8b-instant", "openai/gpt-oss-120b"]
+
+
+def test_grounding_reads_space_grouped_numbers():
+    from optlib_app.agent import ToolRecord, ungrounded_numbers
+
+    rec = [ToolRecord("price_option", {}, {"value_rs": 10623.715478, "forward": 22513.875997, "theta": -1212.119975})]
+    answer = "Total 10 623.715478 Rs, forward 22 513.88 pts, theta ‑1 212.12 Rs per day, 4 lots."
+    assert ungrounded_numbers(answer, "", rec) == []
+    assert ungrounded_numbers("Value 10 999.00 Rs", "", rec) == ["10999.00"]

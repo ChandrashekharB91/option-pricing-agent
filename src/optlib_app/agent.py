@@ -251,9 +251,18 @@ _DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|
                    re.IGNORECASE)
 
 
+_SPACE_GROUP = re.compile(r"(?<![\d.])(\d{1,3}(?:[ \u00a0\u2009\u202f]\d{3})+)(?=[.\D]|$)")
+
+
+def _join_space_groups(text: str) -> str:
+    """'10 623.72' or '22\u202f513.88' (space as thousands separator) -> '10623.72'."""
+    return _SPACE_GROUP.sub(lambda m: re.sub(r"[ \u00a0\u2009\u202f]", "", m.group(1)), text)
+
+
 def _numbers(text: str) -> list[tuple[str, float, int]]:
     """(raw, value, decimals) for each number in text, ignoring dates and years."""
     text = _DATE.sub(" ", text)
+    text = _join_space_groups(text.replace("\u2011", "-").replace("\u2212", "-"))
     out = []
     for m in _NUM.finditer(text):
         raw = m.group(0)
@@ -344,6 +353,8 @@ class OptionPricingAgent:
                     "option_type": r["option_type"], "lots": out["lots"], "lot_size": out["lot_size"],
                     "quantity_units": r["quantity"], "price_per_unit": r["price"], "value_rs": r["value"],
                     "vol": r["vol"], "vol_source": r["vol_source"], "forward": r["forward"], "spot": r["spot"],
+                    "forward_source": "put-call parity on listed calls and puts (median over near-money strikes); "
+                                      "the index future is only a cross-check",
                     "rate": r["rate"], "days_to_expiry": r["time_to_expiry"] * 365, "as_of": r["as_of"],
                     "greeks_per_unit": r["greeks"], "position_greeks": r["position_greeks"],
                     "validation": out["validation"]}

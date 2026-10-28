@@ -1,6 +1,6 @@
 # Regression report: PASS
 
-Run 2026-10-27T14:37:43+00:00 at commit 60ca0da; golden values from 2026-10-27T14:37:43+00:00 (Hedge finder: call+put pairs, two-sided 3-sd stress, rank by worst case).
+Run 2026-10-28T10:32:57+00:00 at commit 4615475; golden values from 2026-10-27T14:37:43+00:00 (Hedge finder: call+put pairs, two-sided 3-sd stress, rank by worst case).
 
 ## Golden values
 

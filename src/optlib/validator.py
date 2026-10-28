@@ -87,9 +87,17 @@ def validate(result: PricingResult, surface: VolSurface) -> ValidationReport:
     # 2. vol source and model ----------------------------------------------------------
     if smile is not None:
         fit = smile.fit
-        checks.append(Check("SVI fit", fit.status, f"RMSE {fit.rmse * 100:.2f} vol pts, "
-                            f"{fit.share_inside(0.0025):.0%} within bid-ask or 0.25 pt, butterfly "
-                            f"{'clean' if fit.butterfly_free else 'VIOLATED'}", fit.rmse, "0.5 / 1.5 vol pts"))
+        near = fit.share_inside(0.0025)
+        why = [w for w in (
+            f"RMSE {fit.rmse * 100:.2f} vol pts is above 1.5" if fit.rmse > 0.015 else
+            f"RMSE {fit.rmse * 100:.2f} vol pts is above 0.5" if fit.rmse > 0.005 else "",
+            f"only {near:.0%} of quotes within bid-ask or 0.25 vol pt (target 90%, fail below 75%)" if near < 0.90 else "",
+            "butterfly arbitrage" if not fit.butterfly_free else "", *fit.warnings) if w]
+        checks.append(Check("SVI fit", fit.status, f"RMSE {fit.rmse * 100:.2f} vol pts (limit 0.5 warn, 1.5 fail), "
+                            f"{near:.0%} within bid-ask or 0.25 pt, butterfly "
+                            f"{'clean' if fit.butterfly_free else 'VIOLATED'}"
+                            + (f"; {fit.status} because {', '.join(why)}" if why and fit.status != "PASS" else ""),
+                            fit.rmse, "RMSE 0.5 / 1.5 vol pts; 90% / 75% near market"))
         if r.vol_source in ("market", "svi_adjusted"):
             n, worst = smile.adjusted_convexity()
             checks.append(Check("smile convexity", "PASS" if worst <= 0.5 else "WARN",
