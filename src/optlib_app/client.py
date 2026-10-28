@@ -79,10 +79,10 @@ class PricingClient:
 
     def recommend(self, capital: float, view: Optional[dict] = None, expiry: Optional[str] = None,
                   families: Optional[list] = None, risk_budget: float = 0.5, objective: str = "risk_adjusted",
-                  top: int = 8, underlying: str = "NIFTY"):
+                  top: int = 8, underlying: str = "NIFTY", min_prob_profit: float = 0.5):
         return self._req("POST", "/strategy/recommend", json={
             "capital": capital, "view": view or {}, "expiry": expiry, "families": families, "risk_budget": risk_budget,
-            "objective": objective, "top": top, "underlying": underlying})
+            "objective": objective, "top": top, "underlying": underlying, "min_prob_profit": min_prob_profit})
 
     def project_strategy(self, legs: list[dict], lots: int = 1, view: Optional[dict] = None, underlying: str = "NIFTY",
                          name: str = "Custom strategy"):

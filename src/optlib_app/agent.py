@@ -45,7 +45,10 @@ Rules:
 6. Be concise. Use desk units: vega per vol point, theta per calendar day, rho per basis point, values in Rs.
 7. Strategy ideas (recommend_strategies, project_strategy, find_hedge) are model output for internal analysis,
    not advice. Lead with each idea's maximum loss, capital needed and chance of profit before its upside, say
-   which market view they assume, and say plainly when no idea has a positive expected profit. Ask for the
+   which market view they assume, and why each strategy suits it (why_this_strategy). Only ideas under
+   "recommended" may be presented as recommendations; "not_recommended" ideas failed the rule (expected P&L > 0
+   and chance of profit >= threshold) and must be labelled as not recommended, with the reasons. Say plainly
+   when nothing is recommended. Ask for the
    capital amount if the user has not given one. End with the disclaimer from the tool result, word for word.
 """
 
@@ -162,7 +165,9 @@ TOOLS += [
             "families": {"type": "array", "items": {"type": "string",
                          "enum": ["buy", "debit", "hedged", "naked", "futures"]}},
             "risk_budget": {"type": "number", "description": "max loss as a share of capital, default 0.5"},
-            "objective": {"type": "string", "enum": ["risk_adjusted", "expected_return", "probability"]}},
+            "objective": {"type": "string", "enum": ["risk_adjusted", "expected_return", "probability"]},
+            "min_prob_profit": {"type": "number", "description": "recommend only ideas with at least this chance "
+                                                                 "of profit, default 0.5"}},
             "required": ["capital"]},
     },
     {
@@ -195,7 +200,7 @@ def _idea(i: dict, source: str) -> dict:
             "charges": i["entry_charges"], "max_profit": i["max_profit"], "max_loss": i["max_loss"],
             "unlimited_loss": i["unlimited_loss"], "stress_loss_3sd": i["stress_loss"],
             "breakevens": i["breakevens"], "chosen_view": i["views"][source], "market_view": i["views"]["market"],
-            "greeks": i["greeks"]}
+            "greeks": i["greeks"], "why_this_strategy": (i.get("rationale") or {}).get("text", "")}
 
 
 class AgentUnavailable(Exception):
@@ -380,12 +385,13 @@ class OptionPricingAgent:
         if name == "recommend_strategies":
             r = svc.recommend(args["capital"], args.get("view"), args.get("underlying", "NIFTY"), args.get("expiry"),
                               args.get("families"), args.get("risk_budget", 0.5), args.get("objective", "risk_adjusted"),
-                              top=5)
+                              top=5, min_prob_profit=args.get("min_prob_profit", 0.5))
             src = r["view"]["source"]
             return {"as_of": r["as_of"], "expiry": r["expiry"], "forward": r["forward"], "capital": r["capital"],
                     "lot_size": r["lot_size"], "view": r["view"], "views": r["views"], "objective": r["objective_label"],
-                    "considered": r["considered"], "feasible": r["feasible"], "note": r["note"],
-                    "ideas": [_idea(i, src) for i in r["ideas"]],
+                    "considered": r["considered"], "feasible": r["feasible"], "note": r["note"], "rule": r["rule"],
+                    "recommended": [_idea(i, src) for i in r["ideas"]],
+                    "not_recommended": [_idea(i, src) | {"reasons": i["reasons"]} for i in r["near_misses"][:3]],
                     "not_affordable": [{k: b[k] for k in ("family", "count", "min_capital")} for b in r["blocked"]],
                     "disclaimer": r["disclaimer"]}
         if name == "project_strategy":

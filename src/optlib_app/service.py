@@ -399,19 +399,21 @@ class PricingService:
 
     def recommend(self, capital: float, view: Optional[dict] = None, underlying: str = "NIFTY", expiry=None,
                   families: Optional[list] = None, risk_budget: float = 0.5, objective: str = "risk_adjusted",
-                  top: int = 8) -> dict:
+                  top: int = 8, min_prob_profit: float = 0.5) -> dict:
         state = self.market_state(underlying, expiry)
         v = self._view(view)
         if v.horizon and not (state.as_of.date() <= v.horizon <= state.expiry):
             raise ServiceError(f"horizon must be between {state.as_of.date()} and the expiry {state.expiry}")
         charges, margin = self._costs()
         try:
-            out = recommend(state, float(capital), v, charges, margin, families, risk_budget, objective, top)
+            out = recommend(state, float(capital), v, charges, margin, families, risk_budget, objective, top,
+                            min_prob_profit=float(min_prob_profit))
         except ValueError as exc:
             raise ServiceError(str(exc)) from exc
         out["data_mode"] = self.mode
         self._audit("recommend", {"capital": capital, "view": view, "underlying": underlying, "expiry": str(expiry),
-                                  "families": families, "risk_budget": risk_budget, "objective": objective}, out)
+                                  "families": families, "risk_budget": risk_budget, "objective": objective,
+                                  "min_prob_profit": min_prob_profit}, out)
         return _clean(out)
 
     def project_strategy(self, legs: list[dict], lots: int = 1, view: Optional[dict] = None,

@@ -268,6 +268,7 @@ def project(strategy: Strategy, state: MarketState, views: dict[str, Distributio
         "loss_if_index_to_zero": float(-min(at_zero, 0.0)),
         "loss_at_20pct": float(-min(at_exp[near].min(), 0.0)),
         "stress_loss": _stress_loss(strategy, state, entries, units, charges, entry_charges),
+        "max_profit_3sd": _stress_loss(strategy, state, entries, units, charges, entry_charges, profit=True),
         "unlimited_loss": bool(unlimited_loss), "unlimited_profit": bool(unlimited_profit),
         "breakevens": breakevens, "views": stats, "greeks": greeks(strategy, state, units),
         "horizon_years": horizon_t, "iv_shift": iv_shift,
@@ -285,12 +286,12 @@ def project(strategy: Strategy, state: MarketState, views: dict[str, Distributio
     return out
 
 
-def _stress_loss(strategy, state, entries, units, charges, entry_charges) -> float:
-    """Worst loss at expiry for index moves up to 3 expected moves either way (a positive number)."""
+def _stress_loss(strategy, state, entries, units, charges, entry_charges, profit: bool = False) -> float:
+    """Worst loss (or, with ``profit``, best profit) at expiry for index moves up to 3 expected moves either way."""
     sd_rel = state.atm_vol * math.sqrt(state.T)
     F = state.forward * np.exp(np.linspace(-3 * sd_rel, 3 * sd_rel, 121))
     pnl = _pnl_curve(strategy, state, entries, F, 0.0, 0.0, units, charges) - entry_charges
-    return float(-min(pnl.min(), 0.0))
+    return float(max(pnl.max(), 0.0)) if profit else float(-min(pnl.min(), 0.0))
 
 
 def _quantile(x, p, q) -> float:

@@ -113,6 +113,14 @@ losses or gains from decisions based on them.*
   - prices each strategy at the bid/ask you would actually pay, with all charges;
   - estimates margin and sizes the trade in lots to fit the capital and a loss budget (default 50% of capital);
   - projects the P&L and ranks by expected profit per rupee at risk, expected return on capital, or chance of profit.
+- **Recommendation rule.** An idea is *recommended* only if its expected P&L is above zero **and** its chance of
+  profit is at least the threshold (default 50%, a slider), under the chosen view, within the capital and the loss
+  budget. Otherwise the screen says there is no recommendation and lists the closest ideas with the reason each
+  failed. Chance of profit = the probability, under the chosen view's distribution of NIFTY at the horizon, of
+  the index levels where the strategy's P&L after all charges is above zero.
+- **Why this strategy.** Every idea carries its basis (the market view it suits, its volatility stance and risk
+  shape) and how it fits the inputs: the breakeven move it needs against the view's expected move, and whether
+  implied vs realised volatility favours buying or selling premium.
 - **Views.** The four views are:
   - *my view*: target level, horizon, vol and IV change;
   - *model*: EWMA realised vol, no drift;

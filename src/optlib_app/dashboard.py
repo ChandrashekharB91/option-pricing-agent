@@ -294,18 +294,41 @@ VIEW_LABELS = {"blend": "Blend: my view + model", "user": "My view", "model": "M
                "market": "Market-implied"}
 
 
-def idea_rows(ideas: list, source: str) -> pd.DataFrame:
+def max_profit_text(i: dict, rupee: str = "") -> str:
+    """Unlimited, or the cap; when the cap needs NIFTY near zero, show the profit within a 3-sd move with *."""
+    if i["max_profit"] is None:
+        return "unlimited"
+    p3 = i.get("max_profit_3sd")
+    if p3 is not None and i["max_profit"] > 1.5 * p3 + 100:
+        return f"{rupee}{p3:,.0f}*"
+    return f"{rupee}{i['max_profit']:,.0f}"
+
+
+def idea_rows(ideas: list, source: str, with_reasons: bool = False) -> pd.DataFrame:
     out = []
     for n, i in enumerate(ideas, 1):
         v = i["views"][source]
-        out.append({"#": n, "strategy": i["strategy"]["label"], "family": i["strategy"]["family_label"],
-                    "lots": i["lots"], "capital needed": i["capital_required"],
-                    "max loss": "open-ended" if i["unlimited_loss"] else f"{i['max_loss']:,.0f}",
-                    "max profit": "unlimited" if i["max_profit"] is None else f"{i['max_profit']:,.0f}",
-                    "expected P&L": v["expected"], "chance of profit": v["prob_profit"], "ES 95%": v["es95"],
-                    "breakevens": ", ".join(f"{b:,.0f}" for b in i["breakevens"]),
-                    "expected, market view": i["views"]["market"]["expected"]})
+        row = {"#": n, "strategy": i["strategy"]["label"],
+               "why this strategy": (i.get("rationale") or {}).get("short", ""),
+               "lots": i["lots"], "capital needed": i["capital_required"],
+               "max loss": "open-ended" if i["unlimited_loss"] else f"{i['max_loss']:,.0f}",
+               "max profit": max_profit_text(i), "expected P&L": v["expected"], "chance of profit": v["prob_profit"],
+               "ES 95%": v["es95"], "breakevens": ", ".join(f"{b:,.0f}" for b in i["breakevens"]),
+               "expected, market view": i["views"]["market"]["expected"]}
+        if with_reasons:
+            short = [r.replace("chance of profit ", "chance ").replace(" is below ", " < ")
+                     .replace("expected P&L Rs ", "expected ₹").replace(" is not above zero", " ≤ 0")
+                     for r in i.get("reasons", [])]
+            row = {"#": n, "strategy": row["strategy"], "why not recommended": "; ".join(short),
+                   **{k: v2 for k, v2 in row.items() if k not in ("#", "strategy")}}
+        out.append(row)
     return pd.DataFrame(out)
+
+
+IDEA_FORMAT = {"capital needed": "{:,.0f}", "expected P&L": "{:,.0f}", "chance of profit": "{:.0%}",
+               "ES 95%": "{:,.0f}", "expected, market view": "{:,.0f}"}
+IDEA_COLUMNS = {"why this strategy": st.column_config.TextColumn(width="large"),
+                "why not recommended": st.column_config.TextColumn(width="medium")}
 
 
 def show_strategy(p: dict, source: str, view_summary: dict | None):
@@ -314,7 +337,9 @@ def show_strategy(p: dict, source: str, view_summary: dict | None):
     c[0].metric("Capital needed", f"₹{p['capital_required']:,.0f}")
     c[1].metric("Max loss", "open-ended" if p["unlimited_loss"] else f"₹{p['max_loss']:,.0f}",
                 help=None if not p["unlimited_loss"] else f"₹{p['stress_loss']:,.0f} in a 3-sd move by expiry")
-    c[2].metric("Max profit", "unlimited" if p["max_profit"] is None else f"₹{p['max_profit']:,.0f}")
+    c[2].metric("Max profit", max_profit_text(p, "₹"),
+                help=None if p["max_profit"] is None else f"₹{p['max_profit']:,.0f} if NIFTY went to zero; "
+                f"₹{p['max_profit_3sd']:,.0f} within a 3-sd move by expiry")
     c[3].metric("Expected P&L", f"₹{v['expected']:,.0f}", help=f"under the {source} view, after all charges")
     c[4].metric("Chance of profit", f"{v['prob_profit']:.0%}")
     c[5].metric("ES 95%", f"₹{v['es95']:,.0f}", help="average loss in the worst 5% of outcomes")
@@ -350,13 +375,16 @@ with tab_strat:
     exp_row = expiry_rows[0]
     st.caption("Enter the capital and your view; the engine prices every strategy at the bid/ask you would pay, "
                "adds all charges and an estimated margin, sizes it to your capital, and projects the P&L.")
-    a1, a2, a3, a4 = st.columns(4)
+    a1, a2, a3, a4, a5 = st.columns(5)
     capital = a1.number_input("Capital (₹)", min_value=1000.0, value=20000.0, step=5000.0, format="%.0f",
                               help="Any amount; strategies are sized to fit it")
     s_exp = a2.selectbox("Expiry", meta["expiries"], key="strat_exp")
     erow = next(e for e in expiry_rows if e["expiry"] == s_exp)
     objective = a3.selectbox("Rank by", list(meta["objectives"]), format_func=lambda k: meta["objectives"][k])
     budget_pct = a4.slider("Max loss, % of capital", 10, 100, 50, 5)
+    min_pop_pct = a5.slider("Min chance of profit", 0, 95, 50, 5, format="%d%%",
+                            help="Recommend only ideas with at least this chance of profit AND expected P&L above "
+                                 "zero under the chosen view")
     b1, b2, b3, b4, b5 = st.columns(5)
     source = b1.selectbox("Market view", list(VIEW_LABELS), format_func=VIEW_LABELS.get)
     target = b2.number_input("My target level", value=float(round(erow["forward"] / 50) * 50), step=50.0,
@@ -374,7 +402,8 @@ with tab_strat:
     with rec_tab:
         if st.button("Find strategies", type="primary"):
             try:
-                st.session_state["rec"] = client.recommend(capital, view, s_exp, families, budget_pct / 100, objective)
+                st.session_state["rec"] = client.recommend(capital, view, s_exp, families, budget_pct / 100, objective,
+                                                           min_prob_profit=min_pop_pct / 100)
             except PricingAPIError as exc:
                 show_error(exc)
         rec = st.session_state.get("rec")
@@ -387,20 +416,33 @@ with tab_strat:
             m[2].metric("Model realised vol", "n/a" if rec["realised_vol"] is None else f"{rec['realised_vol']:.1%}")
             m[3].metric("View: 90% range", f"{vs['p5'] / 1000:.1f}k-{vs['p95'] / 1000:.1f}k",
                         help=f"{VIEW_LABELS[src]}: {vs['p5']:,.0f} to {vs['p95']:,.0f}; mean {vs['mean']:,.0f}")
-            m[4].metric("Strategies", f"{rec['feasible']} fit of {rec['considered']}")
+            m[4].metric("Recommended", f"{rec['recommended_count']} of {rec['feasible']}",
+                        help=f"{rec['feasible']} of {rec['considered']} strategies fit the capital")
+            st.caption(rec["rule"])
             if rec["note"]:
                 st.warning(rec["note"])
+            choices = [("Recommended", i) for i in rec["ideas"]] + [("Not recommended", i) for i in rec["near_misses"]]
             if rec["ideas"]:
-                df = idea_rows(rec["ideas"], src)
-                st.dataframe(df.style.format({"capital needed": "{:,.0f}", "expected P&L": "{:,.0f}",
-                                              "chance of profit": "{:.0%}", "ES 95%": "{:,.0f}",
-                                              "expected, market view": "{:,.0f}"}),
-                             hide_index=True, use_container_width=True)
-                pick = st.selectbox("Inspect", range(len(rec["ideas"])),
-                                    format_func=lambda i: f"{i + 1}. {rec['ideas'][i]['strategy']['label']}")
-                idea = rec["ideas"][pick]
-                st.markdown(f"**{idea['strategy']['label']}** ({idea['strategy']['family_label']}). {idea['why']} "
-                            + (f"_{idea['strategy']['note']}_" if idea["strategy"]["note"] else ""))
+                st.markdown("#### Recommended")
+                st.dataframe(idea_rows(rec["ideas"], src).style.format(IDEA_FORMAT), hide_index=True,
+                             use_container_width=True, column_config=IDEA_COLUMNS)
+            if rec["near_misses"]:
+                with st.expander(f"Not recommended: the {len(rec['near_misses'])} closest, and why",
+                                 expanded=not rec["ideas"]):
+                    st.dataframe(idea_rows(rec["near_misses"], src, with_reasons=True).style.format(IDEA_FORMAT),
+                                 hide_index=True, use_container_width=True, column_config=IDEA_COLUMNS)
+            if any(max_profit_text(i).endswith("*") for _, i in choices):
+                st.caption("\\* profit within a 3-sd move by expiry; the larger figure needs NIFTY to fall to zero.")
+            if choices:
+                pick = st.selectbox("Inspect", range(len(choices)),
+                                    format_func=lambda k: f"{choices[k][0]}: {choices[k][1]['strategy']['label']}")
+                tag, idea = choices[pick]
+                r = idea.get("rationale") or {}
+                st.markdown(f"**{idea['strategy']['label']}** ({idea['strategy']['family_label']}, {tag.lower()}). "
+                            f"{idea['why']}")
+                st.markdown(f"**Why this strategy.** {r.get('basis', '')} {r.get('fit', '')}")
+                if idea.get("reasons"):
+                    st.error("Not recommended: " + "; ".join(idea["reasons"]) + ".")
                 show_strategy(idea, src, vs)
             if rec["blocked"]:
                 with st.expander("Strategies that do not fit this capital"):
@@ -437,6 +479,7 @@ with tab_strat:
         proj = st.session_state.get("proj")
         if proj:
             st.markdown(proj["why"])
+            st.markdown(f"**Why this strategy.** {proj['rationale']['basis']} {proj['rationale']['fit']}")
             show_strategy(proj, view["source"], proj["views_summary"][view["source"]])
             st.plotly_chart(charts.pnl_heatmap(proj["grid"]), use_container_width=True)
 

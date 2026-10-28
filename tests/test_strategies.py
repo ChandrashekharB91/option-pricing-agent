@@ -149,13 +149,37 @@ def test_unquoted_leg_refused(state):
 
 def test_recommend_respects_capital_and_risk(state):
     r = recommend(state, 20000, View("user", target=22900.0), CH, MP)
-    assert r["disclaimer"] == DISCLAIMER and r["ideas"]
+    assert r["disclaimer"] == DISCLAIMER and r["ideas"] and r["min_prob_profit"] == 0.5
     for i in r["ideas"]:
         assert i["capital_required"] * (1 + MP.capital_buffer) <= 20000 + 1
         risk = i["stress_loss"] if i["unlimited_loss"] else i["max_loss"]
         assert risk <= 0.5 * 20000 + 1
-        assert i["views"]["user"]["expected"] > 0
+        assert i["views"]["user"]["expected"] > 0 and i["views"]["user"]["prob_profit"] >= 0.5
+        assert i["recommended"] and not i["reasons"]
+        assert i["rationale"]["basis"].startswith("Bullish") and "22,900" in i["rationale"]["fit"]
     assert any(b["family"] == "Naked selling" for b in r["blocked"])  # Rs 20k cannot carry a naked short
+
+
+def test_recommendation_rule_and_near_misses(state):
+    r = recommend(state, 20000, View("user", target=22900.0), CH, MP, min_prob_profit=0.5)
+    assert r["near_misses"] and all(not m["recommended"] and m["reasons"] for m in r["near_misses"])
+    for m in r["near_misses"]:
+        v = m["views"]["user"]
+        assert v["expected"] <= 0 or v["prob_profit"] < 0.5
+    looser = recommend(state, 20000, View("user", target=22900.0), CH, MP, min_prob_profit=0.0)
+    assert looser["recommended_count"] > r["recommended_count"]
+    none = recommend(state, 20000, View("blend"), CH, MP)  # target = forward: costs dominate
+    assert not none["ideas"] and none["near_misses"] and none["note"].startswith("No recommendation")
+    with pytest.raises(ValueError):
+        recommend(state, 20000, View(), CH, MP, min_prob_profit=1.5)
+
+
+def test_rationale_reads_the_shape(state):
+    r = recommend(state, 300000, View("blend", target=22500.0), CH, MP)
+    condor = next(i for i in r["ideas"] + r["near_misses"] if i["strategy"]["name"] in ("Iron condor", "Short strangle"))
+    assert "stays between" in condor["rationale"]["fit"] and "sells volatility" in condor["rationale"]["fit"]
+    put = project(strat(StrategyLeg("put", 1, EXP, 22500.0)), state, build_views(state, state.T), state.T, CH, MP)
+    assert put["max_profit"] > 10 * put["max_profit_3sd"] > 0  # the cap needs NIFTY near zero
 
 
 def test_recommend_scales_with_capital(state):
@@ -166,8 +190,8 @@ def test_recommend_scales_with_capital(state):
 
 
 def test_market_view_has_no_free_lunch(state):
-    r = recommend(state, 300000, View("market"), CH, MP)
-    assert not r["any_positive"] and "market-implied" in r["note"]
+    r = recommend(state, 300000, View("market"), CH, MP, min_prob_profit=0.0)
+    assert not r["ideas"] and "market-implied" in r["note"]
 
 
 def test_recommend_validation(state):
@@ -248,5 +272,5 @@ def test_agent_strategy_tools_append_disclaimer(svc):
                     LLMReply("Here are the ideas.")])
     reply = OptionPricingAgent(svc, llm=llm).ask("I have 20000 and think NIFTY reaches 22900. What should I do?")
     out = reply.tool_calls[0]["output"]
-    assert out["ideas"] and "pnl" not in str(out.keys())
+    assert out["recommended"] and "rule" in out and out["recommended"][0]["why_this_strategy"]
     assert reply.answer.endswith(DISCLAIMER)

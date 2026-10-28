@@ -98,6 +98,9 @@ class RecommendRequest(BaseModel):
     expiry: Optional[date] = None
     families: Optional[list[Literal["buy", "debit", "hedged", "naked", "futures"]]] = None
     risk_budget: float = Field(default=0.5, gt=0, le=1, description="max loss as a share of capital")
+    min_prob_profit: float = Field(default=0.5, ge=0, lt=1,
+                                   description="recommend only ideas with at least this chance of profit "
+                                               "(and expected P&L above zero)")
     objective: Literal["risk_adjusted", "expected_return", "probability"] = "risk_adjusted"
     top: int = Field(default=8, ge=1, le=20)
 
@@ -204,7 +207,7 @@ def strategy_meta(underlying: str = "NIFTY", svc: PricingService = Depends(get_s
 @app.post("/strategy/recommend")
 def strategy_recommend(req: RecommendRequest, svc: PricingService = Depends(get_service)):
     return _call(svc.recommend, req.capital, req.view.model_dump(), req.underlying, req.expiry, req.families,
-                 req.risk_budget, req.objective, req.top)
+                 req.risk_budget, req.objective, req.top, req.min_prob_profit)
 
 
 @app.post("/strategy/project")

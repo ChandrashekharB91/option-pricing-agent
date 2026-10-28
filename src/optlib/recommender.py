@@ -108,13 +108,114 @@ def _score(objective: str, st: dict, risk: float, capital_used: float) -> float:
     return st["expected"] / max(risk, 1.0)
 
 
+BASIS = {  # what each strategy is for: market view, volatility stance, risk shape
+    "Long call": "Bullish. Pays a premium for upside; the loss is capped at that premium; gains if implied vol rises.",
+    "Long put": "Bearish, or insurance against a fall. Loss capped at the premium paid; gains if implied vol rises.",
+    "Long straddle": "Expects a big move either way (e.g. before an event). Loss capped at the premium; the move "
+                     "must beat both breakevens.",
+    "Long strangle": "Expects a big move either way, cheaper than a straddle but with wider breakevens.",
+    "Bull call spread": "Moderately bullish. Cheaper than a call; profit capped at the upper strike; little "
+                        "exposure to vol.",
+    "Bear put spread": "Moderately bearish. Cheaper than a put; profit capped at the lower strike; little "
+                       "exposure to vol.",
+    "Long call butterfly": "Expects NIFTY to settle near the middle strike. Small cost, capped loss, peak profit "
+                           "at the middle.",
+    "Bull put spread": "Mildly bullish or not bearish. Collects premium; loss capped by the lower put; earns time "
+                       "decay.",
+    "Bear call spread": "Mildly bearish or not bullish. Collects premium; loss capped by the upper call; earns time "
+                        "decay.",
+    "Iron condor": "Range-bound. Collects premium on both sides; loss capped by the wings; earns time decay and "
+                   "gains if vol falls.",
+    "Iron butterfly": "Expects NIFTY to pin near the centre strike. More premium than a condor, narrower profit "
+                      "zone; capped loss.",
+    "Short straddle": "Expects very little movement. Collects the most premium; losses are open-ended in a big "
+                      "move either way.",
+    "Short strangle": "Expects a range. Collects premium with wider breakevens than a straddle; open-ended losses "
+                      "beyond them.",
+    "Short put": "Bullish to neutral; paid to take on downside risk. Large loss if NIFTY falls sharply.",
+    "Short call": "Bearish to neutral; paid to take on upside risk. Open-ended loss if NIFTY rallies.",
+    "Long future": "Bullish, one-for-one with NIFTY; gains and losses are open-ended.",
+    "Short future": "Bearish, one-for-one with NIFTY; gains and losses are open-ended.",
+    "Protective put": "Bullish with insurance: a long future whose downside is capped by a bought put.",
+    "Protective call": "Bearish with insurance: a short future whose upside loss is capped by a bought call.",
+    "Covered call": "Neutral to mildly bullish: a long future plus a sold call; earns premium but gives up upside "
+                    "above the strike.",
+    "Collar": "Bullish with limits: a long future between a bought put and a sold call; the call helps pay for "
+              "the put.",
+}
+
+
+STANCE = {  # one-phrase version of BASIS for tables
+    "Long call": "Bullish", "Long put": "Bearish", "Long straddle": "Big move either way",
+    "Long strangle": "Big move either way", "Bull call spread": "Moderately bullish",
+    "Bear put spread": "Moderately bearish", "Long call butterfly": "Settles near the middle strike",
+    "Bull put spread": "Mildly bullish, collects premium", "Bear call spread": "Mildly bearish, collects premium",
+    "Iron condor": "Range-bound, capped loss", "Iron butterfly": "Pins near the centre, capped loss",
+    "Short straddle": "Very little movement, open-ended loss", "Short strangle": "Range-bound, open-ended loss",
+    "Short put": "Bullish to neutral, collects premium", "Short call": "Bearish to neutral, collects premium",
+    "Long future": "Bullish, one-for-one", "Short future": "Bearish, one-for-one",
+    "Protective put": "Bullish with downside insurance", "Protective call": "Bearish with upside insurance",
+    "Covered call": "Neutral to mildly bullish, earns premium", "Collar": "Bullish within a band",
+}
+
+
+def rationale(p: dict, state: MarketState, dist, source: str) -> dict:
+    """Why this strategy: its basis (what it is for) and how it fits the chosen view and today's vols."""
+    name = p["strategy"]["name"]
+    basis = BASIS.get(name, "Custom combination of the legs shown.")
+    F = state.forward
+    mean = dist.mean()
+    move = mean / F - 1
+    be = sorted(p["breakevens"])
+    view_txt = f"the {source} view expects {mean:,.0f} ({move:+.1%})"
+    view = p["strategy"].get("view", "")
+    if not be:
+        fit = f"No breakeven within 20% of the forward; {view_txt}."
+    elif len(be) == 1:
+        side = "above" if view in ("bullish",) or (view not in ("bearish",) and p["greeks"]["delta"] > 0) else "below"
+        fit = f"Needs NIFTY {side} {be[0]:,.0f} ({be[0] / F - 1:+.1%}) at the horizon; {view_txt}."
+    else:
+        lo, hi = be[0], be[-1]
+        if name in ("Long straddle", "Long strangle") or (name not in BASIS and p["greeks"]["gamma"] > 0):
+            fit = (f"Needs NIFTY outside {lo:,.0f} to {hi:,.0f} ({lo / F - 1:+.1%} / {hi / F - 1:+.1%}); "
+                   f"{view_txt}.")
+        else:
+            fit = (f"Profits if NIFTY stays between {lo:,.0f} and {hi:,.0f} ({lo / F - 1:+.1%} / {hi / F - 1:+.1%}); "
+                   f"{view_txt}.")
+    vega = p["greeks"]["vega"] / max(p.get("lots", 1), 1)  # Rs per vol point per lot
+    if state.realised_vol and abs(vega) < 150:
+        vol = " Little net exposure to volatility."
+    elif state.realised_vol:
+        rich = state.atm_vol > state.realised_vol
+        stance = "sells" if vega < 0 else "buys"
+        helps = (vega < 0) == rich
+        vol = (f" It {stance} volatility: implied {state.atm_vol:.1%} vs model {state.realised_vol:.1%}, which "
+               f"{'favours' if helps else 'works against'} it.")
+    else:
+        vol = ""
+    stance = STANCE.get(name, "Custom combination")
+    if not be:
+        need = "no breakeven nearby"
+    elif len(be) == 1:
+        need = f"{'above' if 'above' in fit[:30] else 'below'} {be[0]:,.0f} ({be[0] / F - 1:+.1%})"
+    else:
+        need = (f"{'outside' if 'outside' in fit[:30] else 'between'} {be[0]:,.0f}-{be[-1]:,.0f}")
+    short = f"{stance}; needs NIFTY {need}; view {mean:,.0f} ({move:+.1%})"
+    return {"basis": basis, "fit": fit + vol, "text": f"{basis} {fit}{vol}", "short": short}
+
+
 def recommend(state: MarketState, capital: float, view: View, charges: Charges, margin: MarginParams,
               families: Optional[Iterable[str]] = None, risk_budget: float = 0.5, objective: str = "risk_adjusted",
-              top: int = 8, per_name: int = 2) -> dict:
+              top: int = 8, per_name: int = 2, min_prob_profit: float = 0.5, near_misses: int = 5) -> dict:
+    """Rank strategies for the capital and view. An idea is *recommended* only if its expected P&L is above zero
+    and its chance of profit is at least ``min_prob_profit`` under the chosen view (and it fits the capital and
+    risk budget). The best ideas that fail are returned separately as near misses, with the reasons."""
     if capital <= 0:
         raise ValueError("capital must be positive")
     if not 0 < risk_budget <= 1:
         raise ValueError("risk budget is a share of capital between 0 and 1")
+    if not 0 <= min_prob_profit < 1:
+        raise ValueError("minimum chance of profit is a share between 0 and 1")
     if objective not in OBJECTIVES:
         raise ValueError(f"objective must be one of {list(OBJECTIVES)}")
     fams = list(families or FAMILIES)
@@ -145,40 +246,66 @@ def recommend(state: MarketState, capital: float, view: View, charges: Charges, 
         risk = _risk(one) * lots
         used = one["capital_required"] * lots
         scaled = {k: v * lots if k != "prob_profit" else v for k, v in st.items()}
-        ranked.append((_score(objective, scaled, risk, used), s, lots, scaled))
+        quick = scaled["expected"] <= 0 or scaled["prob_profit"] < min_prob_profit  # 1-lot screen; re-checked at size
+        ranked.append((_score(objective, scaled, risk, used), s, lots, scaled, quick))
 
     ranked.sort(key=lambda x: x[0], reverse=True)
-    if any(st["expected"] > 0 for _, _, _, st in ranked):  # show losing ideas only when nothing wins
-        ranked = [r for r in ranked if r[3]["expected"] > 0]
-    ideas, per = [], {}
-    for score, s, lots, st in ranked:
-        if per.get(s.name, 0) >= per_name:
+    dist = views[view.source]
+
+    def check(st: dict) -> list[str]:
+        reasons = []
+        if st["expected"] <= 0:
+            reasons.append(f"expected P&L Rs {st['expected']:,.0f} is not above zero")
+        if st["prob_profit"] < min_prob_profit:
+            pp = st["prob_profit"]
+            shown = f"{pp:.0%}" if round(pp * 100) < round(min_prob_profit * 100) else f"{pp:.1%}"
+            reasons.append(f"chance of profit {shown} is below {min_prob_profit:.0%}")
+        return reasons
+
+    # the rule is applied to the full-size projection, so the reasons match the numbers shown
+    ideas, misses, per_ok, per_miss = [], [], {}, {}
+    for score, s, lots, _st, quick in ranked:
+        if len(ideas) >= top and len(misses) >= near_misses:
+            break
+        bucket, per, limit = (ideas, per_ok, top) if not quick else (misses, per_miss, near_misses)
+        if len(bucket) >= limit or per.get(s.name, 0) >= per_name:
+            continue
+        full = project(s, state, views, t_h, charges, margin, lots=lots, iv_shift=view.iv_shift)
+        reasons = check(full["views"][view.source])
+        bucket, per, limit = (ideas, per_ok, top) if not reasons else (misses, per_miss, near_misses)
+        if len(bucket) >= limit or per.get(s.name, 0) >= per_name:
             continue
         per[s.name] = per.get(s.name, 0) + 1
-        full = project(s, state, views, t_h, charges, margin, lots=lots, iv_shift=view.iv_shift)
-        full["score"] = score
-        full["why"] = _explain(full, view.source)
-        ideas.append(full)
-        if len(ideas) >= top:
-            break
-    positive = [i for i in ideas if i["views"][view.source]["expected"] > 0]
+        full.update(score=score, recommended=not reasons, reasons=reasons, why=_explain(full, view.source),
+                    rationale=rationale(full, state, dist, view.source))
+        bucket.append(full)
+    if ideas:
+        note = ""
+    else:
+        note = (f"No recommendation for this capital and view: no strategy that fits has both a positive expected "
+                f"P&L and at least a {min_prob_profit:.0%} chance of profit. ")
+        if view.source == "market":
+            note += "Under the market-implied view every strategy loses its costs on average."
+        elif abs(dist.mean() / state.forward - 1) < 0.002:
+            note += (f"The view's mean ({dist.mean():,.0f}) is close to the forward ({state.forward:,.0f}), so costs "
+                     "dominate; set a target that differs from the forward.")
+        else:
+            note += ("Strategies with a high chance of profit (spreads, hedged selling) need more capital for "
+                     "margin; increase the capital, lower the threshold, or change the view.")
     return {
         "as_of": state.as_of.isoformat(), "underlying": state.underlying, "expiry": state.expiry.isoformat(),
         "forward": state.forward, "spot": state.spot, "atm_vol": state.atm_vol, "realised_vol": state.realised_vol,
         "lot_size": state.lot_size, "capital": capital, "risk_budget": risk_budget, "objective": objective,
-        "objective_label": OBJECTIVES[objective], "view": {**asdict(view), "horizon": (view.horizon or state.expiry).isoformat()},
+        "objective_label": OBJECTIVES[objective], "min_prob_profit": min_prob_profit,
+        "view": {**asdict(view), "horizon": (view.horizon or state.expiry).isoformat()},
         "views": {k: v.to_dict() for k, v in views.items()}, "families": fams,
         "considered": len(candidates), "not_quoted": skipped, "feasible": len(ranked),
+        "recommended_count": sum(1 for r in ranked if not r[4]),
         "blocked": [{**b, "min_capital": None if math.isinf(b["min_capital"]) else b["min_capital"]}
                     for b in blocked.values()],
-        "ideas": ideas, "any_positive": bool(positive),
-        "note": ("" if positive else
-                 "No idea has a positive expected profit under this view after costs. Expected profit comes only "
-                 "from a view that differs from the market's; "
-                 + ("under the market-implied view every strategy loses its costs on average."
-                    if view.source == "market" else
-                    f"here the view's mean ({views[view.source].mean():,.0f}) is close to the forward "
-                    f"({state.forward:,.0f}), so costs dominate.")),
+        "ideas": ideas, "near_misses": misses, "any_positive": bool(ideas), "note": note,
+        "rule": (f"Recommended only if expected P&L > 0 and chance of profit >= {min_prob_profit:.0%} under the "
+                 f"{view.source} view, within the capital and a maximum loss of {risk_budget:.0%} of it."),
         "disclaimer": DISCLAIMER,
     }
 
@@ -203,6 +330,7 @@ def project_custom(state: MarketState, legs: list[dict], lots: int, view: View, 
     out["grid"] = pnl_grid(s, state, lots, charges, iv_shift=view.iv_shift)
     out["views_summary"] = {k: v.to_dict() for k, v in views.items()}
     out["why"] = _explain(out, view.source)
+    out["rationale"] = rationale(out, state, views[view.source], view.source)
     out["disclaimer"] = DISCLAIMER
     return out
 
