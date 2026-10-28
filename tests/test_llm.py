@@ -150,3 +150,21 @@ def test_number_grounding():
     bad = "Breakeven is 22,663.44 and the delta-adjusted value is 9,999.5."
     assert ungrounded_numbers(bad, "q", rec) == ["22,663.44", "9,999.5"]
     assert ungrounded_numbers("Expiry 2026-10-27, 3 checks passed.", "q", rec) == []
+
+
+def test_list_models_reads_openai_compatible_listing():
+    from optlib_app.llm import OpenAICompatibleLLM
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"data": [{"id": "openai/gpt-oss-120b"}, {"id": "llama-3.1-8b-instant"}]}
+
+    class Session:
+        def get(self, url, headers=None, timeout=None):
+            assert url.endswith("/models") and headers["Authorization"] == "Bearer k"
+            return Resp()
+
+    llm = OpenAICompatibleLLM("groq", "https://api.groq.com/openai/v1", "m", "k", session=Session())
+    assert llm.list_models() == ["llama-3.1-8b-instant", "openai/gpt-oss-120b"]

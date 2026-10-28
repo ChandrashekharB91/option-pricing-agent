@@ -161,6 +161,19 @@ class OpenAICompatibleLLM:
         return [{"type": "function", "function": {"name": t["name"], "description": t["description"],
                                                   "parameters": t["input_schema"]}} for t in tools]
 
+    def list_models(self) -> list[str]:
+        """Model ids this key can use (GET {base_url}/models, the OpenAI-compatible listing)."""
+        headers = {"Authorization": f"Bearer {self._key}"} if self._key else {}
+        try:
+            resp = self.session.get(f"{self.base_url}/models", headers=headers, timeout=self.timeout)
+        except Exception as exc:  # noqa: BLE001
+            raise LLMError(f"{self.provider}: cannot reach {self.base_url} ({type(exc).__name__})") from exc
+        if resp.status_code >= 400:
+            raise LLMError(f"{self.provider} HTTP {resp.status_code} listing models")
+        data = resp.json()
+        items = data.get("data", data.get("models", [])) if isinstance(data, dict) else data
+        return sorted(str(m.get("id") or m.get("name")) for m in items if isinstance(m, dict))
+
     def chat(self, system, messages, tools=None, max_tokens=2048) -> LLMReply:
         body = {"model": self.model, "messages": self.to_provider(system, messages), "max_tokens": max_tokens}
         if tools:
