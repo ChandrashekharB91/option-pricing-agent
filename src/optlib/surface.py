@@ -95,8 +95,18 @@ class ExpirySmile:
     def summary(self) -> str:
         g = self.gaps()
         atm = self.fit.atm_gap(self.slice.atm_vol())
-        return (f"{self.fit.summary()}\n  SVI vs market: ATM {atm * 100:+.3f} vol pts, largest gap "
-                f"{np.max(np.abs(g)) * 100:.3f} at {self.slice.strikes[int(np.argmax(np.abs(g)))]:,.0f}")
+        k = np.log(self.slice.strikes / self.forward)
+        lo, hi = self.fit.fit_range
+        inside = (k >= lo - 1e-12) & (k <= hi + 1e-12)
+        gi = np.where(inside, np.abs(g), -1.0)
+        j = int(np.argmax(gi))
+        out = (f"{self.fit.summary()}\n  SVI vs market: ATM {atm * 100:+.3f} vol pts, largest gap in fit range "
+               f"{gi[j] * 100:.3f} at {self.slice.strikes[j]:,.0f}")
+        if self.fit.excluded:
+            k_lo, k_hi = self.forward * np.exp(max(lo, -5.0)), self.forward * np.exp(min(hi, 5.0))
+            out += (f"\n  fit range {k_lo:,.0f} to {k_hi:,.0f} (+/-3 expected moves): {int(inside.sum())} quotes fitted, "
+                    f"{self.fit.excluded} outside priced at their own market vol")
+        return out
 
 
 @dataclass(frozen=True)
