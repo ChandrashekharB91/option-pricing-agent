@@ -1,6 +1,8 @@
 """Daily NIFTY options feed: build today's numbers, preview them, and email them to confirmed subscribers.
 
-    python scripts/daily_feed.py --preview                 # writes reports/feed/feed_YYYYMMDD.html; sends nothing
+    python scripts/daily_feed.py                           # same as --preview
+    python scripts/daily_feed.py --preview                 # writes reports/feed/feed_YYYYMMDD.html, opens it; sends nothing
+    python scripts/daily_feed.py --signup                  # opens the readers' sign-up page (the API must be running)
     python scripts/daily_feed.py --test you@example.com    # sends one copy marked [TEST] to that address
     python scripts/daily_feed.py --send                    # sends to every active subscriber (once per day)
     python scripts/daily_feed.py --subscribers             # lists subscribers (no tokens)
@@ -13,6 +15,7 @@ to data/feed/outbox as an .eml file instead of being sent.
 """
 import argparse
 import sys
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -27,10 +30,28 @@ from optlib_app.subscribers import SubscriptionError  # noqa: E402
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def open_signup(base: str) -> int:
+    """Open the sign-up page served by the API; explain how to start the API if it is not running."""
+    import requests
+
+    url = f"{base}/feed/signup"
+    try:
+        requests.get(f"{base}/health", timeout=3).raise_for_status()
+    except requests.RequestException:
+        print(f"The API is not running at {base}. Start it in another terminal with\n"
+              f"    python -m uvicorn optlib_app.api:app\nthen run this again (or open {url} yourself).")
+        return 1
+    print(f"Opening {url}")
+    webbrowser.open(url)
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--preview", action="store_true", help="write the HTML email to reports/feed/ and stop")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--preview", action="store_true", help="write the HTML email to reports/feed/, open it, and stop "
+                                                          "(the default)")
+    g.add_argument("--signup", action="store_true", help="open the sign-up page in the browser (API must be running)")
     g.add_argument("--test", nargs="+", metavar="EMAIL", help="send a [TEST] copy to these addresses only")
     g.add_argument("--send", action="store_true", help="send to all active subscribers")
     g.add_argument("--subscribers", action="store_true", help="list subscribers")
@@ -38,12 +59,17 @@ def main() -> int:
     ap.add_argument("--name", default="", help="with --add: the reader's name")
     ap.add_argument("--force", action="store_true", help="send even if today's feed already went out, or on a weekend")
     ap.add_argument("--underlying", default="NIFTY")
+    ap.add_argument("--no-open", action="store_true", help="with --preview: do not open the browser")
     a = ap.parse_args()
     if hasattr(sys.stdout, "reconfigure"):  # Windows consoles and Task Scheduler logs are not UTF-8 by default
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
+    if not (a.test or a.send or a.subscribers or a.add or a.signup):
+        a.preview = True
     svc = PricingService()
     jobs = FeedJobs(svc)
+    if a.signup:
+        return open_signup(jobs.public_url)
     print(f"Data: {svc.mode} · mail: {jobs.mail.describe()}")
 
     if a.subscribers:
@@ -75,7 +101,10 @@ def main() -> int:
         out = ROOT / "reports" / "feed" / f"feed_{feed['date'].replace('-', '')}.html"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(jobs.preview_html(feed), encoding="utf-8")
-        print(f"Preview: {out}  (open it in a browser)")
+        print(f"Preview: {out}")
+        if not a.no_open:
+            webbrowser.open(out.as_uri())
+        print("To subscribe readers: python scripts/daily_feed.py --signup  (or the dashboard's Daily feed tab)")
         return 0
 
     try:

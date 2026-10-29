@@ -177,7 +177,8 @@ no trade ideas (the strategy recommender stays on the internal dashboard) and ev
 not-investment-advice disclaimer and a one-click unsubscribe link. The layout works in light and dark mail
 clients and on phones.
 
-**Sign-up.** Dashboard → *Daily feed* tab (or `POST /feed/subscribe`). Readers tick a consent box; a
+**Sign-up.** Readers open the sign-up page at `http://127.0.0.1:8000/feed/signup` (with the API running;
+`python scripts/daily_feed.py --signup` opens it), or use the dashboard's *Daily feed* tab. Readers tick a consent box; a
 confirmation email goes out and the subscription starts only when they click it (double opt-in). Unsubscribe
 links are personal; admins can also erase a subscriber completely. Subscribers live in `data/feed/subscribers.db`
 (git-ignored).
@@ -186,7 +187,8 @@ links are personal; admins can also erase a subscriber completely. Subscribers l
 to open in Outlook or Mail).
 
 ```powershell
-python scripts/daily_feed.py --preview                  # writes reports/feed/feed_YYYYMMDD.html
+python scripts/daily_feed.py --preview                  # writes reports/feed/feed_YYYYMMDD.html and opens it
+python scripts/daily_feed.py --signup                   # opens the sign-up page (API must be running)
 python scripts/daily_feed.py --add reader@company.com --name "Reader"   # sends the confirmation
 python scripts/daily_feed.py --test you@company.com     # one [TEST] copy
 python scripts/daily_feed.py --send                     # all confirmed subscribers, once per day

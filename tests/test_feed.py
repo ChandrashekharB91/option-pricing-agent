@@ -156,6 +156,16 @@ def test_api_feed_flow(svc, tmp_path, monkeypatch):
         assert c.get("/feed/subscribers").json()["counts"]["active"] == 1
         assert "NIFTY OPTIONS DAILY" in c.get("/feed/preview").text.upper()
         assert "unsubscribed" in c.post("/feed/unsubscribe", params={"token": token}).text
+        page = c.get("/feed/signup")
+        assert page.status_code == 200 and 'name="consent"' in page.text
+        bad = c.post("/feed/signup", content="email=new%40y.com&name=N", headers={"content-type": "application/x-www-form-urlencoded"})
+        assert bad.status_code == 400 and "consent" in bad.text and "new@y.com" in bad.text
+        ok = c.post("/feed/signup", content="email=new%40y.com&name=N&consent=yes",
+                    headers={"content-type": "application/x-www-form-urlencoded"})
+        assert ok.status_code == 200 and "confirmation link" in ok.text and jobs.store.get("new@y.com").status == "pending"
+        bot = c.post("/feed/signup", content="email=bot%40y.com&consent=yes&website=x",
+                     headers={"content-type": "application/x-www-form-urlencoded"})
+        assert bot.status_code == 200 and jobs.store.get("bot@y.com") is None
         jobs.admin_key = "k3y"
         assert c.get("/feed/subscribers").status_code == 403
         assert c.get("/feed/subscribers", headers={"X-Admin-Key": "k3y"}).status_code == 200

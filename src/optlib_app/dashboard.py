@@ -623,6 +623,8 @@ with tab_feed:
                 show_error(exc)
         st.caption("Double opt-in: the subscription starts only after the reader clicks the link in the "
                    "confirmation email. Every feed email has a one-click unsubscribe link.")
+        st.markdown(f"Readers without dashboard access sign up at **[{url}/feed/signup]({url}/feed/signup)** "
+                    "(share the address set in `FEED_PUBLIC_URL` once the API is reachable on your network).")
 
     with right:
         st.markdown("**Preview of today's email**")

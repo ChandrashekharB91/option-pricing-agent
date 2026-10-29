@@ -278,6 +278,32 @@ def feed_subscribe(req: SubscribeRequest, feed=Depends(get_feed)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/feed/signup", response_class=HTMLResponse)
+def feed_signup_form():
+    """Sign-up page for readers: open http://<api address>/feed/signup in a browser."""
+    from .feed_jobs import signup_page
+
+    return signup_page()
+
+
+@app.post("/feed/signup", response_class=HTMLResponse)
+async def feed_signup_submit(request: Request, feed=Depends(get_feed)):
+    from urllib.parse import parse_qs
+
+    from .feed_jobs import signup_page
+    from .subscribers import SubscriptionError
+
+    form = {k: v[0] for k, v in parse_qs((await request.body()).decode("utf-8", "replace")).items()}
+    email, name = form.get("email", ""), form.get("name", "")
+    if form.get("website"):  # hidden field only bots fill in: answer as if it worked, send nothing
+        return signup_page("Thanks. Check your inbox for the confirmation link.")
+    try:
+        r = feed.subscribe(email, name, form.get("consent") == "yes", source="signup page")
+    except SubscriptionError as exc:
+        return HTMLResponse(signup_page(str(exc).capitalize() + ".", ok=False, email=email, name=name), status_code=400)
+    return signup_page(r["message"], ok=r["status"] != "error")
+
+
 @app.get("/feed/confirm", response_class=HTMLResponse)
 def feed_confirm(token: str = "", feed=Depends(get_feed)):
     from .feed_jobs import page

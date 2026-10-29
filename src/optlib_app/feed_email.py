@@ -182,7 +182,7 @@ def subject(feed: dict) -> str:
 
 
 def render(feed: dict, unsubscribe_url: str = "", images: str = "cid", recipient_name: str = "",
-           manage_url: str = "") -> EmailMessageParts:
+           signup_url: str = "") -> EmailMessageParts:
     imgs = charts(feed)
     e0 = feed["expiries"][0]
     ch = feed["changes"]
@@ -313,6 +313,8 @@ def render(feed: dict, unsubscribe_url: str = "", images: str = "cid", recipient
     hello = f"Hi {_e(recipient_name)}, here" if recipient_name else "Here"
     unsub = (f'<a href="{_e(unsubscribe_url)}" style="color:{MUTED};text-decoration:underline" class="muted">'
              f"Unsubscribe</a>" if unsubscribe_url else "Reply with UNSUBSCRIBE to stop these emails")
+    signup = (f' Forwarded to you? <a href="{_e(signup_url)}" style="color:{MUTED};text-decoration:underline" '
+              f'class="muted">Subscribe here</a>.' if signup_url else "")
     footer = f"""
 <tr><td style="padding:26px 28px 6px" class="pad">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px" class="disc">
@@ -322,7 +324,7 @@ def render(feed: dict, unsubscribe_url: str = "", images: str = "cid", recipient
 <tr><td style="padding:14px 28px 28px;font-size:11.5px;line-height:1.6;color:{MUTED}" class="pad muted">
   Data: {_e(src)} at {as_of.strftime('%H:%M')} IST; NSE India VIX and index closes; FBIL MIBOR-OIS. Prices are
   model values on mid-market vols, not quotes you can trade on. You receive this because you subscribed to the
-  {_e(feed['underlying'])} options daily feed. {unsub}.
+  {_e(feed['underlying'])} options daily feed. {unsub}.{signup}
 </td></tr>"""
 
     style = f"""

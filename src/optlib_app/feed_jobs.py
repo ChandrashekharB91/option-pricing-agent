@@ -86,7 +86,7 @@ class FeedJobs:
     def preview_html(self, feed: Optional[dict] = None, name: str = "") -> str:
         feed = feed or self.build()
         return render(feed, unsubscribe_url=f"{self.public_url}/feed/unsubscribe?token=preview", images="data",
-                      recipient_name=name).html
+                      recipient_name=name, signup_url=f"{self.public_url}/feed/signup").html
 
     def sent_today(self, day: str) -> bool:
         return any(r.get("date") == day and r.get("kind") == "daily" and r.get("sent", 0) > 0
@@ -111,7 +111,8 @@ class FeedJobs:
             recipients = [(s.email, s.name, self.link("unsubscribe", s.token)) for s in self.store.active()]
         messages = []
         for email, name, unsub in recipients:
-            m = render(feed, unsubscribe_url=unsub, images="cid", recipient_name=name)
+            m = render(feed, unsubscribe_url=unsub, images="cid", recipient_name=name,
+                       signup_url=f"{self.public_url}/feed/signup")
             subject = ("[TEST] " if test else "") + m.subject
             messages.append(build_message(self.mail, email, subject, m.html, m.text, m.images, unsubscribe_url=unsub))
         results = Mailer(self.mail).send(messages) if messages else []
@@ -150,3 +151,40 @@ p{{line-height:1.6;color:var(--muted)}}</style></head><body><div class="c"><div 
 
 
 __all__ = ["FeedJobs", "SubscriptionError", "page"]
+
+
+def signup_page(message: str = "", ok: bool = True, email: str = "", name: str = "") -> str:
+    """Public sign-up form for readers (served at /feed/signup; works without the dashboard)."""
+    note = ""
+    if message:
+        col = "#15803d" if ok else "#b91c1c"
+        note = f'<div class="msg" style="border-color:{col};color:{col}">{html.escape(message)}</div>'
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Subscribe: NIFTY options daily</title><style>
+:root{{color-scheme:light dark;--bg:#f1f5f9;--card:#fff;--ink:#0f172a;--muted:#64748b;--line:#e2e8f0;--soft:#f8fafc;--accent:#4f46e5}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#0b1220;--card:#111a2e;--ink:#e2e8f0;--muted:#94a3b8;--line:#22304a;--soft:#0f1729;--accent:#818cf8}}}}
+*{{box-sizing:border-box}} body{{margin:0;background:var(--bg);font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--ink)}}
+.c{{max-width:560px;margin:7vh auto;background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}}
+.h{{background:linear-gradient(120deg,#0b1220,#1e1b4b);padding:22px 26px;color:#fff}}
+.k{{font-size:12px;letter-spacing:.14em;font-weight:700;color:#a5b4fc}} .t{{font-size:24px;font-weight:750;margin-top:6px}}
+.b{{padding:22px 26px}} p{{line-height:1.6;color:var(--muted);margin:0 0 14px;font-size:14.5px}}
+label{{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}}
+input[type=text],input[type=email]{{width:100%;padding:11px 12px;border-radius:9px;border:1px solid var(--line);background:var(--soft);color:var(--ink);font-size:15px}}
+.cb{{display:flex;gap:10px;align-items:flex-start;margin:16px 0;font-size:13.5px;line-height:1.5;color:var(--ink);font-weight:400}}
+.cb input{{margin-top:3px}} button{{width:100%;padding:12px;border:0;border-radius:9px;background:var(--accent);color:#fff;font-size:15px;font-weight:650;cursor:pointer}}
+.msg{{border:1px solid;border-radius:9px;padding:10px 12px;margin:0 0 14px;font-size:14px;line-height:1.5}}
+.hp{{position:absolute;left:-5000px}} .d{{font-size:12px;color:var(--muted);line-height:1.55;margin-top:16px}}
+ul{{margin:0 0 6px;padding-left:18px;color:var(--muted);font-size:14px;line-height:1.6}}
+</style></head><body><div class="c"><div class="h"><div class="k">NIFTY OPTIONS DAILY</div>
+<div class="t">Subscribe to the daily feed</div></div><div class="b">{note}
+<p>One email after each trading day with the NIFTY option market in numbers:</p>
+<ul><li>implied volatility by expiry and its daily change, skew and the expected move</li>
+<li>market-implied odds, reference option prices with Greeks</li><li>open interest, futures basis, rates and data-quality checks</li></ul>
+<form method="post" action="signup">
+<label for="name">Name</label><input id="name" name="name" type="text" maxlength="80" value="{html.escape(name)}" autocomplete="name">
+<label for="email">Email</label><input id="email" name="email" type="email" maxlength="254" required value="{html.escape(email)}" autocomplete="email">
+<input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+<label class="cb"><input type="checkbox" name="consent" value="yes" required> {html.escape(CONSENT_TEXT)}</label>
+<button type="submit">Subscribe</button></form>
+<div class="d">We send a confirmation link first; nothing else arrives until you click it. Every email has a one-click
+unsubscribe link. <b>Not investment advice.</b> {html.escape(DISCLAIMER)}</div></div></div></body></html>"""
