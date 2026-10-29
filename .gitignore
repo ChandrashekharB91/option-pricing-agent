@@ -11,3 +11,6 @@ dist/
 !.env.example
 /data/
 *.ipynb_checkpoints
+
+# Generated on every run of scripts/regression.py (has a timestamp)
+reports/regression_report.md
