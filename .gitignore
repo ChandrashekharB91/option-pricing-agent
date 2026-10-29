@@ -14,3 +14,4 @@ dist/
 
 # Generated on every run of scripts/regression.py (has a timestamp)
 reports/regression_report.md
+reports/feed/

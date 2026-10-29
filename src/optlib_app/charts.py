@@ -166,3 +166,18 @@ def hedge_payoff(h: dict, i: int) -> go.Figure:
     fig.update_layout(title=f"Book P&L at expiry: {x['label']}", xaxis_title="NIFTY at expiry",
                       yaxis_title="P&L from today (Rs)", legend=dict(orientation="h", y=-0.2), **{**LAYOUT, "height": 420})
     return fig
+
+
+def themed(fig: go.Figure, dark: bool = False) -> go.Figure:
+    """Restyle a figure for the dashboard's light or dark theme (transparent background, matching grid and text)."""
+    ink, muted, grid = ("#e2e8f0", "#94a3b8", "#1f2a40") if dark else ("#0f172a", "#64748b", "#e8ecf3")
+    fig.update_layout(template="plotly_dark" if dark else "plotly_white", paper_bgcolor="rgba(0,0,0,0)",
+                      plot_bgcolor="rgba(0,0,0,0)", font=dict(color=ink, size=12.5),
+                      title=dict(font=dict(size=15, color=ink), x=0.01, xanchor="left"),
+                      legend=dict(font=dict(color=muted)),
+                      hoverlabel=dict(bgcolor="#111a2e" if dark else "#ffffff", font_color=ink, bordercolor=grid))
+    fig.update_xaxes(gridcolor=grid, zerolinecolor=grid, linecolor=grid, title_font=dict(color=muted),
+                     tickfont=dict(color=muted))
+    fig.update_yaxes(gridcolor=grid, zerolinecolor=grid, linecolor=grid, title_font=dict(color=muted),
+                     tickfont=dict(color=muted))
+    return fig

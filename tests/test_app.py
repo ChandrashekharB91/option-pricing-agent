@@ -70,7 +70,7 @@ def test_api_endpoints(client):
     assert client.get("/expiries/NIFTY").json()["expiries"] == [EXP]
     assert client.get("/overview/NIFTY").status_code == 200
     s = client.get(f"/smile/NIFTY/{EXP}").json()
-    assert len(s["quotes"]) == 114 and len(s["svi_curve"]) == 200
+    assert len(s["quotes"]) == 114 and len(s["svi_curve"]) == 200 and s["fit_range"][0] < s["forward"] < s["fit_range"][1]
     p = client.post("/price", json={"expiry": EXP, "strike": 22500, "option_type": "call", "lots": 1}).json()
     assert p["result"]["price"] == pytest.approx(163.44, abs=0.01) and p["validation"]["released"]
     b = client.post("/book", json={"positions": STRADDLE}).json()

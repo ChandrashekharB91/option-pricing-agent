@@ -167,6 +167,53 @@ the projector. Each idea is settled at NIFTY's actual expiry close after charges
 The output is `reports/backtest_report.html` and `reports/backtest_summary.json`; per-trade rows go to
 `data/backtest/trades.csv.gz`.
 
+## Daily email feed
+
+A daily email for readers with the day's NIFTY option-market numbers: index level and India VIX, ATM implied
+vol by expiry with its day-on-day change, 25-delta risk reversal and butterfly, the expected (1-sd) move to each
+expiry, market-implied (risk-neutral) odds at the weekly expiry, reference prices with Greeks and validation
+status, open interest and put/call ratio, futures basis, MIBOR-OIS rates, and the data-quality checks. It carries
+no trade ideas (the strategy recommender stays on the internal dashboard) and every email ends with a
+not-investment-advice disclaimer and a one-click unsubscribe link. The layout works in light and dark mail
+clients and on phones.
+
+**Sign-up.** Dashboard → *Daily feed* tab (or `POST /feed/subscribe`). Readers tick a consent box; a
+confirmation email goes out and the subscription starts only when they click it (double opt-in). Unsubscribe
+links are personal; admins can also erase a subscriber completely. Subscribers live in `data/feed/subscribers.db`
+(git-ignored).
+
+**Try it without email.** Leave `SMTP_HOST` empty: every email is saved to `data/feed/outbox/*.eml` (double-click
+to open in Outlook or Mail).
+
+```powershell
+python scripts/daily_feed.py --preview                  # writes reports/feed/feed_YYYYMMDD.html
+python scripts/daily_feed.py --add reader@company.com --name "Reader"   # sends the confirmation
+python scripts/daily_feed.py --test you@company.com     # one [TEST] copy
+python scripts/daily_feed.py --send                     # all confirmed subscribers, once per day
+python scripts/daily_feed.py --subscribers
+```
+
+**Sending for real.** Set `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM` in `.env` (examples in
+`.env.example`; for Gmail use an app password, never the account password). Set `FEED_PUBLIC_URL` to an address
+readers can reach, or the confirm/unsubscribe links will only work on this machine; until then readers can reply
+UNSUBSCRIBE and an admin removes them in the dashboard.
+
+**Schedule.** Quotes are live only in market hours, so send at about 15:20 IST with `DATA_MODE=live`. Windows
+Task Scheduler, no administrator rights needed (the PC must be on and logged in):
+
+```powershell
+# from the repo folder; scripts\daily_feed.cmd uses .venv and logs to data\feed\task.log
+schtasks /Create /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 15:20 /TN "NIFTY options daily" /TR "$PWD\scripts\daily_feed.cmd"
+schtasks /Run /TN "NIFTY options daily"       # try it once now
+```
+
+Market holidays are not detected yet: on a holiday the script sends the last available quotes, so pause the task
+on NSE holidays. The send log is `data/feed/sent.jsonl`; the day-on-day changes use `data/feed/history.jsonl`.
+
+**Compliance note.** The email is market information, not research or advice. Sending recommendations to
+people outside the desk would need SEBI research-analyst or investment-adviser registration, which is why the
+recommender is not part of the feed. Keep the consent record and honour unsubscribes (the DPDP Act, 2023).
+
 ## Walkthrough notebook
 
 `notebooks/01_pipeline_walkthrough.ipynb` follows one NIFTY chain through every step built so far (market data,

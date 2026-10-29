@@ -8,3 +8,38 @@ headless = false
 [browser]
 serverAddress = "localhost"
 gatherUsageStats = false
+
+# Two palettes: the sidebar "Dark mode" switch (or Settings > Theme) chooses between them.
+[theme]
+baseRadius = "0.6rem"
+buttonRadius = "0.6rem"
+showWidgetBorder = true
+headingFontWeights = [750, 700, 650, 600, 600, 600]
+
+[theme.light]
+primaryColor = "#4f46e5"
+backgroundColor = "#f6f7fb"
+secondaryBackgroundColor = "#eef1f8"
+textColor = "#0f172a"
+borderColor = "#e3e8f1"
+linkColor = "#4338ca"
+dataframeHeaderBackgroundColor = "#f1f4fa"
+chartCategoricalColors = ["#4f46e5", "#ea580c", "#0e7490", "#16a34a", "#d97706", "#7c3aed", "#db2777", "#64748b"]
+
+[theme.light.sidebar]
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f1f4fa"
+
+[theme.dark]
+primaryColor = "#818cf8"
+backgroundColor = "#0b1220"
+secondaryBackgroundColor = "#121b2f"
+textColor = "#e2e8f0"
+borderColor = "#22304a"
+linkColor = "#a5b4fc"
+dataframeHeaderBackgroundColor = "#152038"
+chartCategoricalColors = ["#818cf8", "#fb923c", "#22d3ee", "#4ade80", "#fbbf24", "#a78bfa", "#f472b6", "#94a3b8"]
+
+[theme.dark.sidebar]
+backgroundColor = "#0e1626"
+secondaryBackgroundColor = "#152038"

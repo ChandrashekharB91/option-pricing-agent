@@ -7,10 +7,11 @@ PricingService, so a number is identical wherever it is shown.
 """
 from __future__ import annotations
 
+import secrets
 from datetime import date
 from typing import Literal, Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -230,3 +231,106 @@ def ask(req: AskRequest, svc: PricingService = Depends(get_service)):
     except AgentUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return _call(lambda: agent.ask(req.question, req.history).to_dict())
+
+
+# ------------------------------------------------------------------ daily feed (email digest)
+_feed = None
+
+
+def get_feed(svc: PricingService = Depends(get_service)):
+    from .feed_jobs import FeedJobs
+
+    global _feed
+    if _feed is None or _feed.svc is not svc:
+        _feed = FeedJobs(svc)
+    return _feed
+
+
+def require_admin(request: Request, x_admin_key: Optional[str] = Header(default=None), feed=Depends(get_feed)):
+    """Admin actions: FEED_ADMIN_KEY must match when it is set; without a key only this machine may call."""
+    if feed.admin_key:
+        if not x_admin_key or not secrets.compare_digest(x_admin_key, feed.admin_key):
+            raise HTTPException(status_code=403, detail="admin key required (X-Admin-Key header)")
+        return
+    host = request.client.host if request.client else ""
+    if host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+        raise HTTPException(status_code=403, detail="set FEED_ADMIN_KEY to allow admin actions from other machines")
+
+
+class SubscribeRequest(BaseModel):
+    email: str = Field(..., max_length=254)
+    name: str = Field("", max_length=80)
+    consent: bool = False
+
+
+class SendRequest(BaseModel):
+    to: Optional[list[str]] = Field(None, description="test addresses; omit to send to all active subscribers")
+    force: bool = False
+
+
+@app.post("/feed/subscribe")
+def feed_subscribe(req: SubscribeRequest, feed=Depends(get_feed)):
+    from .subscribers import SubscriptionError
+
+    try:
+        return feed.subscribe(req.email, req.name, req.consent, source="api")
+    except SubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/feed/confirm", response_class=HTMLResponse)
+def feed_confirm(token: str = "", feed=Depends(get_feed)):
+    from .feed_jobs import page
+
+    s = feed.confirm(token)
+    if not s:
+        return HTMLResponse(page("Link not recognised", "This confirmation link is not valid. Please sign up again.",
+                                 ok=False), status_code=404)
+    if s.status == "unsubscribed":
+        return page("You are unsubscribed", "This address unsubscribed earlier. Sign up again to restart the feed.",
+                    ok=False)
+    return page("Subscription confirmed", f"{s.email} will receive the NIFTY options daily feed after each "
+                                          "trading day. Every email has an unsubscribe link.")
+
+
+@app.get("/feed/unsubscribe", response_class=HTMLResponse)
+@app.post("/feed/unsubscribe", response_class=HTMLResponse)
+def feed_unsubscribe(token: str = "", feed=Depends(get_feed)):
+    from .feed_jobs import page
+
+    s = feed.unsubscribe(token)
+    if not s:
+        return HTMLResponse(page("Link not recognised", "This unsubscribe link is not valid (or is from a test or "
+                                 "preview email). Reply to any feed email with UNSUBSCRIBE instead.", ok=False),
+                            status_code=404)
+    return page("You are unsubscribed", f"{s.email} will not receive any more feed emails.")
+
+
+@app.get("/feed/preview", response_class=HTMLResponse)
+def feed_preview(name: str = "", feed=Depends(get_feed)):
+    return _call(feed.preview_html, None, name)
+
+
+@app.get("/feed/status", dependencies=[Depends(require_admin)])
+def feed_status(feed=Depends(get_feed)):
+    return feed.status()
+
+
+@app.get("/feed/subscribers", dependencies=[Depends(require_admin)])
+def feed_subscribers(feed=Depends(get_feed)):
+    return {"subscribers": [s.public() for s in feed.store.all()], "counts": feed.store.counts()}
+
+
+@app.delete("/feed/subscribers/{email}", dependencies=[Depends(require_admin)])
+def feed_delete(email: str, feed=Depends(get_feed)):
+    return {"deleted": feed.store.delete(email)}
+
+
+@app.post("/feed/send", dependencies=[Depends(require_admin)])
+def feed_send(req: SendRequest, feed=Depends(get_feed)):
+    from .subscribers import SubscriptionError
+
+    try:
+        return _call(feed.send, req.to, req.force)
+    except SubscriptionError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

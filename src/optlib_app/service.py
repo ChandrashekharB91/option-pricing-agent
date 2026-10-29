@@ -213,10 +213,14 @@ class PricingService:
         surf = self.surface(underlying)
         sm = self._smile(surf, _to_date(expiry))
         s = sm.slice
-        grid = np.linspace(s.strikes.min(), s.strikes.max(), 200)
+        F = s.forward.forward
+        lo, hi = sm.fit.fit_range
+        k_lo = max(float(s.strikes.min()), F * math.exp(max(lo, -5.0)))
+        k_hi = min(float(s.strikes.max()), F * math.exp(min(hi, 5.0)))
+        grid = np.linspace(k_lo, k_hi, 200)  # SVI is drawn where it was fitted; beyond, prices use market vols
         return _clean({
-            "underlying": surf.underlying, "expiry": s.expiry, "forward": s.forward.forward, "atm_vol": s.atm_vol(),
-            "quotes": s.to_records(),
+            "underlying": surf.underlying, "expiry": s.expiry, "forward": F, "atm_vol": s.atm_vol(),
+            "quotes": s.to_records(), "fit_range": [k_lo, k_hi], "excluded": sm.fit.excluded,
             "svi_curve": [{"strike": k, "vol": float(sm.fit.vol(k))} for k in grid],
             "qa_summary": s.qa.summary(),
             "dropped": [{"strike": d.quote.strike, "type": d.quote.option_type, "reasons": list(d.reasons)}

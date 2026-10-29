@@ -96,3 +96,28 @@ class PricingClient:
 
     def ask(self, question: str, history: Optional[list] = None):
         return self._req("POST", "/agent/ask", json={"question": question, "history": history or []})
+
+    # daily feed -------------------------------------------------------------
+    def _admin(self, admin_key: str = "") -> dict:
+        return {"X-Admin-Key": admin_key} if admin_key else {}
+
+    def feed_subscribe(self, email: str, name: str = "", consent: bool = False):
+        return self._req("POST", "/feed/subscribe", json={"email": email, "name": name, "consent": consent})
+
+    def feed_preview(self, name: str = "") -> str:
+        resp = self.session.get(f"{self.base_url}/feed/preview", params={"name": name}, timeout=self.timeout)
+        if resp.status_code >= 400:
+            raise PricingAPIError(resp.status_code, resp.text)
+        return resp.text
+
+    def feed_status(self, admin_key: str = ""):
+        return self._req("GET", "/feed/status", headers=self._admin(admin_key))
+
+    def feed_subscribers(self, admin_key: str = ""):
+        return self._req("GET", "/feed/subscribers", headers=self._admin(admin_key))
+
+    def feed_delete(self, email: str, admin_key: str = ""):
+        return self._req("DELETE", f"/feed/subscribers/{email}", headers=self._admin(admin_key))
+
+    def feed_send(self, to: Optional[list[str]] = None, force: bool = False, admin_key: str = ""):
+        return self._req("POST", "/feed/send", json={"to": to, "force": force}, headers=self._admin(admin_key))

@@ -9,24 +9,34 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
-from optlib_app import charts
+from optlib_app import charts, ui
 from optlib_app.client import PricingAPIError, PricingClient
 
-CALL, PUT, ACCENT, GREY = "#2563eb", "#ea580c", "#7c3aed", "#6b7280"
-STATUS_COLOR = {"PASS": "#16a34a", "WARN": "#d97706", "FAIL": "#dc2626", "SKIP": "#6b7280"}
+st.set_page_config(page_title="Option Pricing Agent", page_icon="◆", layout="wide")
+THEME = ui.current_theme()
+DARK = THEME == "dark"
+ui.inject_css(THEME)
+
+CALL, PUT, GREY = ("#818cf8", "#fb923c", "#94a3b8") if DARK else ("#4f46e5", "#ea580c", "#6b7280")
+ACCENT = "#a78bfa" if DARK else "#7c3aed"
+STATUS_COLOR = ui.STATUS
 DEFAULT_BOOK = pd.DataFrame([
     {"expiry": "2026-10-27", "strike": 22500.0, "option_type": "call", "lots": -2.0},
     {"expiry": "2026-10-27", "strike": 22500.0, "option_type": "put", "lots": -2.0},
     {"expiry": "2026-10-27", "strike": 22000.0, "option_type": "put", "lots": 2.0},
 ])
 
-st.set_page_config(page_title="Option Pricing Agent", layout="wide")
-
 
 @st.cache_resource
 def api(url: str) -> PricingClient:
     return PricingClient(url)
+
+
+def show(fig: go.Figure, where=st) -> None:
+    """Every chart goes through here so it follows the light/dark theme."""
+    where.plotly_chart(charts.themed(fig, DARK), use_container_width=True, theme=None)
 
 
 def badge(status: str) -> str:
@@ -45,23 +55,25 @@ def validation_table(report: dict):
 
 # ------------------------------------------------------------------ sidebar
 with st.sidebar:
-    st.header("Option Pricing Agent")
+    st.markdown('<div class="opa-brand">◆ Option Pricing <span>Agent</span></div>'
+                '<div class="opa-muted">NSE index options · pricing, risk, strategies</div>', unsafe_allow_html=True)
+    st.write("")
+    ui.theme_switch(st)
     url = st.text_input("API URL", value=PricingClient().base_url)
     client = api(url)
     try:
         h = client.health()
         st.success(f"API connected · {h['data_mode']} data")
-        st.caption(f"Market data as of {h['as_of'][:16].replace('T', ' ')} IST")
         underlyings = h["underlyings"]
         llm = h.get("llm") or {}
-        if llm.get("configured"):
-            st.caption(f"Agent LLM: {llm['provider']} · {llm['model']}")
-        else:
-            st.caption("Agent LLM: not configured")
+        st.caption(f"Agent LLM: {llm['provider']} · {llm['model']}" if llm.get("configured")
+                   else "Agent LLM: not configured")
     except Exception as exc:  # noqa: BLE001
-        st.error(f"API not reachable at {url}. Start it with `uvicorn optlib_app.api:app`.\n\n{exc}")
+        st.error(f"API not reachable at {url}. Start it with `python -m uvicorn optlib_app.api:app`.\n\n{exc}")
         st.stop()
     underlying = st.selectbox("Underlying", underlyings, index=0)
+    st.divider()
+    st.caption("Analytics for the internal desk. Not investment advice.")
 
 try:
     ov = client.overview(underlying)
@@ -73,8 +85,17 @@ expiry_rows = ov["expiries"]
 expiry_ids = [e["expiry"] for e in expiry_rows]
 lot = ov["lot_size"]
 
-tab_market, tab_price, tab_book, tab_risk, tab_strat, tab_agent = st.tabs(
-    ["Market & smile", "Pricer", "Book risk", "Risk (VaR, stress, P&L)", "Strategy lab", "Ask the agent"])
+as_of_txt = pd.Timestamp(ov.get("as_of") or h["as_of"]).strftime("%a %d %b %Y, %H:%M IST")
+e_near = expiry_rows[0]
+ui.hero(f"{underlying} options desk", f"{ov['spot']:,.2f}",
+        f"Market data as of {as_of_txt} · {h['data_mode']} data · lot size {lot}",
+        [f"Surface {ov['surface_status']}", f"ATM vol {e_near['atm_vol']:.2%} ({e_near['expiry']})",
+         f"{len(expiry_rows)} expiries fitted", f"Curve {ov['curve']['label'].replace('MIBOR-OIS ', '')} · "
+         f"{ov['curve']['age_days']} days old"])
+
+tab_market, tab_price, tab_book, tab_risk, tab_strat, tab_agent, tab_feed = st.tabs(
+    ["Market & smile", "Pricer", "Book risk", "Risk (VaR, stress, P&L)", "Strategy lab", "Ask the agent",
+     "Daily feed"])
 
 # ------------------------------------------------------------------ market
 with tab_market:
@@ -82,9 +103,11 @@ with tab_market:
     c[0].metric("Spot", f"{ov['spot']:,.2f}")
     c[1].metric("Lot size", lot)
     c[2].metric("Discount curve", ov["curve"]["label"].replace("MIBOR-OIS ", ""),
-                f"{ov['curve']['age_days']} days old", delta_color="off")
+                f"{ov['curve']['age_days']} days old", delta_color="off", delta_arrow="off")
     c[3].metric("Expiries fitted", len(expiry_rows))
-    c[4].markdown(f"Surface status<br>{badge(ov['surface_status'])}", unsafe_allow_html=True)
+    c[4].metric("Surface status", ov["surface_status"],
+                f"{sum(e['svi_status'] == 'PASS' for e in expiry_rows)} of {len(expiry_rows)} smiles PASS",
+                delta_color="off", delta_arrow="off")
 
     table = pd.DataFrame([{
         "expiry": e["expiry"], "days": e["days"], "forward": e["forward"], "rate": e["rate"], "ATM vol": e["atm_vol"],
@@ -93,30 +116,38 @@ with tab_market:
         "QA": e["qa_status"], "SVI RMSE (vol pts)": e["svi_rmse_vol_pts"], "SVI ATM gap": e["svi_atm_gap_vol_pts"],
         "SVI": e["svi_status"]} for e in expiry_rows])
     st.dataframe(table.style.format({"days": "{:.2f}", "forward": "{:,.2f}", "rate": "{:.3%}", "ATM vol": "{:.2%}",
-                                     "SVI RMSE (vol pts)": "{:.3f}", "SVI ATM gap": "{:+.3f}"}),
+                                     "SVI RMSE (vol pts)": "{:.3f}", "SVI ATM gap": "{:+.3f}"})
+                 .map(lambda s: f"color: {STATUS_COLOR.get(s, 'inherit')}; font-weight: 600", subset=["QA", "SVI"]),
                  hide_index=True, use_container_width=True)
 
-    exp = st.selectbox("Expiry", expiry_ids, key="smile_exp")
+    c1, c2 = st.columns([1, 2])
+    exp = c1.selectbox("Expiry", expiry_ids, key="smile_exp")
+    width = c2.slider("Strikes shown (± points from forward)", 500, 5000, 1800, 100)
     sm = client.smile(exp, underlying)
     q = pd.DataFrame(sm["quotes"])
-    width = st.slider("Strikes shown (± points from forward)", 500, 5000, 1800, 100)
     q = q[(q.strike - sm["forward"]).abs() <= width]
     curve = pd.DataFrame(sm["svi_curve"])
     curve = curve[(curve.strike - sm["forward"]).abs() <= width]
+    band = "rgba(129,140,248,0.22)" if DARK else "rgba(79,70,229,0.15)"
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=q.strike, y=q.iv_ask * 100, line=dict(width=0), showlegend=False, hoverinfo="skip"))
     fig.add_trace(go.Scatter(x=q.strike, y=q.iv_bid * 100, fill="tonexty", line=dict(width=0),
-                             fillcolor="rgba(37,99,235,0.18)", name="bid-ask"))
+                             fillcolor=band, name="bid-ask"))
     fig.add_trace(go.Scatter(x=q.strike, y=q.iv_mid * 100, mode="markers", marker=dict(color=CALL, size=5),
                              name="market mid", customdata=q[["type", "bid", "ask"]],
                              hovertemplate="%{x:,.0f} %{customdata[0]}<br>vol %{y:.2f}%<br>"
                                            "bid %{customdata[1]:.2f} / ask %{customdata[2]:.2f}<extra></extra>"))
-    fig.add_trace(go.Scatter(x=curve.strike, y=curve.vol * 100, line=dict(color=ACCENT, width=2), name="SVI fit"))
+    fig.add_trace(go.Scatter(x=curve.strike, y=curve.vol * 100, line=dict(color=ACCENT, width=2.5), name="SVI fit"))
     fig.add_vline(x=sm["forward"], line=dict(color=GREY, dash="dash"),
-                  annotation_text=f"forward {sm['forward']:,.0f}")
+                  annotation_text=f"forward {sm['forward']:,.0f}", annotation_font_color=GREY)
+    lo_k, hi_k = sm["fit_range"]
+    fig.add_vrect(x0=lo_k, x1=hi_k, fillcolor=ACCENT, opacity=0.06, line_width=0,
+                  annotation_text="SVI fit range (±3 expected moves)", annotation_position="bottom left",
+                  annotation_font_color=GREY)
     fig.update_layout(title=f"{underlying} smile · {exp} · ATM {sm['atm_vol']:.2%}", xaxis_title="strike",
-                      yaxis_title="implied vol (%)", height=440, margin=dict(t=50, b=40), legend=dict(x=0.01, y=0.99))
-    st.plotly_chart(fig, use_container_width=True)
+                      yaxis_title="implied vol (%)", height=460, margin=dict(t=70, b=40),
+                      legend=dict(orientation="h", x=1, xanchor="right", y=1.08))
+    show(fig)
     with st.expander("Chain QA"):
         st.code(sm["qa_summary"], language=None)
         if sm["dropped"]:
@@ -140,10 +171,10 @@ with tab_price:
                 st.error("Result withheld: a validation check failed. See the report below.")
             c = st.columns(5)
             c[0].metric("Price per unit", f"{r['price']:,.2f}")
-            c[1].metric("Position value", f"₹{r['value']:,.0f}", f"{p_lots:g} lots × {lot}", delta_color="off")
-            c[2].metric("Implied vol", f"{r['vol']:.2%}", r["vol_source"], delta_color="off")
-            c[3].metric("Forward", f"{r['forward']:,.2f}", f"rate {r['rate']:.3%}", delta_color="off")
-            c[4].markdown(f"Validation<br>{badge(v['status'])}", unsafe_allow_html=True)
+            c[1].metric("Position value", f"₹{r['value']:,.0f}", f"{p_lots:g} lots × {lot}", delta_color="off", delta_arrow="off")
+            c[2].metric("Implied vol", f"{r['vol']:.2%}", r["vol_source"], delta_color="off", delta_arrow="off")
+            c[3].metric("Forward", f"{r['forward']:,.2f}", f"rate {r['rate']:.3%}", delta_color="off", delta_arrow="off")
+            c[4].metric("Validation", v["status"], "released" if v["released"] else "withheld", delta_color="off", delta_arrow="off")
             g = pd.DataFrame({"per unit": r["greeks"], "position": r["position_greeks"]})
             g.index.name = "Greek"
             left, right = st.columns([1, 2])
@@ -173,7 +204,7 @@ with tab_book:
             c[2].metric("Gamma", f"{t['gamma']:,.4f}")
             c[3].metric("Vega / vol pt", f"₹{t['vega']:,.0f}")
             c[4].metric("Theta / day", f"₹{t['theta']:,.0f}")
-            c[5].markdown(f"Validation<br>{badge(b['status'])}", unsafe_allow_html=True)
+            c[5].metric("Validation", b["status"])
             st.dataframe(pd.DataFrame(b["positions"]).style.format(
                 {"lots": "{:g}", "quantity": "{:,.0f}", "price": "{:,.2f}", "vol": "{:.2%}", "value": "{:,.0f}",
                  "delta": "{:,.2f}", "gamma": "{:.4f}",
@@ -190,7 +221,7 @@ with tab_book:
                                margin=dict(t=50, b=40))
             heat.update_xaxes(type="category")
             heat.update_yaxes(type="category")
-            st.plotly_chart(heat, use_container_width=True)
+            show(heat)
         except PricingAPIError as exc:
             show_error(exc)
 
@@ -214,39 +245,39 @@ with tab_risk:
         m = st.columns(6)
         m[0].metric("1-day VaR 99%", f"₹{v['var']:,.0f}")
         m[1].metric("ES 97.5%", f"₹{v['es']:,.0f}")
-        m[2].metric("Worst day in window", f"₹{v['worst']['pnl']:,.0f}", v["worst"]["date"], delta_color="off")
+        m[2].metric("Worst day in window", f"₹{v['worst']['pnl']:,.0f}", v["worst"]["date"], delta_color="off", delta_arrow="off")
         m[3].metric("Worst stress", f"₹{r['stress'][0]['pnl']:,.0f}", r["stress"][0]["scenario"][:28],
-                    delta_color="off")
+                    delta_color="off", delta_arrow="off")
         m[4].metric("Backtest exceptions", f"{bt.get('exceptions', '-')} / {bt.get('days', '-')}",
-                    f"traffic light {bt.get('traffic_light', 'n/a')}", delta_color="off")
-        m[5].markdown(f"Risk status<br>{badge(r['status'])}", unsafe_allow_html=True)
+                    f"traffic light {bt.get('traffic_light', 'n/a')}", delta_color="off", delta_arrow="off")
+        m[5].metric("Risk status", r["status"])
         st.caption(f"History through {r['history_last_date']} (no look-ahead into the pricing day) · "
                    f"window {v['first_date']} to {v['last_date']}")
 
         sub = st.tabs(["Limits & Greeks", "VaR & ES", "Backtest", "Stress tests", "P&L explain", "Report"])
         with sub[0]:
-            st.plotly_chart(charts.limits_bar(r["limits"]), use_container_width=True)
+            show(charts.limits_bar(r["limits"]))
             st.caption("Limits are placeholders in config/risk_limits.json; the risk team sets them.")
             st.dataframe(pd.DataFrame(r["by_expiry"]).style.format(
                 {"value": "{:,.0f}", "delta": "{:,.1f}", "gamma": "{:.4f}", "vega": "{:,.0f}", "theta": "{:,.0f}"}),
                 hide_index=True, use_container_width=True)
         with sub[1]:
             left, right = st.columns([3, 2])
-            left.plotly_chart(charts.var_histogram(v), use_container_width=True)
-            right.plotly_chart(charts.contributions_bar(v), use_container_width=True)
+            show(charts.var_histogram(v), left)
+            show(charts.contributions_bar(v), right)
             right.caption("Average P&L of each position on the worst 2.5% of days; red adds to the loss, "
                           "green offsets it. The bars add up to ES.")
             st.caption(v["method"])
         with sub[2]:
             if "exceptions" in bt:
-                st.plotly_chart(charts.backtest_chart(bt), use_container_width=True)
+                show(charts.backtest_chart(bt))
                 st.markdown(f"Kupiec (frequency) p = **{bt['kupiec_p']:.2f}** · Christoffersen (clustering) "
                             f"p = **{bt['christoffersen_p']:.2f}** · values below 0.05 reject the model. "
                             f"_{bt['note']}._")
             else:
                 st.info(bt.get("error", "backtest unavailable"))
         with sub[3]:
-            st.plotly_chart(charts.stress_bar(r["stress"]), use_container_width=True)
+            show(charts.stress_bar(r["stress"]))
             st.dataframe(pd.DataFrame([{k: x[k] for k in ("scenario", "kind", "index_move", "vol_mult", "pnl")}
                                        for x in r["stress"]]).style.format(
                 {"index_move": "{:+.2%}", "vol_mult": "x{:.2f}", "pnl": "{:,.0f}"}), hide_index=True,
@@ -264,7 +295,7 @@ with tab_risk:
             if cc[2].button("Explain P&L"):
                 try:
                     e = client.pnl_explain(positions, d0, d1)
-                    st.plotly_chart(charts.pnl_waterfall(e), use_container_width=True)
+                    show(charts.pnl_waterfall(e))
                     st.dataframe(pd.DataFrame(e["legs"])[["label", "close0", "close1", "vol0", "vol1", "actual", "delta",
                                                           "gamma", "vega", "theta", "cross", "unexplained"]].style.format(
                         {"close0": "{:,.2f}", "close1": "{:,.2f}", "vol0": "{:.2%}", "vol1": "{:.2%}",
@@ -343,8 +374,7 @@ def show_strategy(p: dict, source: str, view_summary: dict | None):
     c[3].metric("Expected P&L", f"₹{v['expected']:,.0f}", help=f"under the {source} view, after all charges")
     c[4].metric("Chance of profit", f"{v['prob_profit']:.0%}")
     c[5].metric("ES 95%", f"₹{v['es95']:,.0f}", help="average loss in the worst 5% of outcomes")
-    st.plotly_chart(charts.payoff_chart(p, {**view_summary, "name": source} if view_summary else None),
-                    use_container_width=True)
+    show(charts.payoff_chart(p, {**view_summary, "name": source} if view_summary else None))
     left, right = st.columns([3, 2])
     legs = pd.DataFrame([{"leg": l["label"], "bid": l["bid"], "ask": l["ask"], "fill price": l["price"],
                           "vol": l["vol"]} for l in p["legs"]])
@@ -481,7 +511,7 @@ with tab_strat:
             st.markdown(proj["why"])
             st.markdown(f"**Why this strategy.** {proj['rationale']['basis']} {proj['rationale']['fit']}")
             show_strategy(proj, view["source"], proj["views_summary"][view["source"]])
-            st.plotly_chart(charts.pnl_heatmap(proj["grid"]), use_container_width=True)
+            show(charts.pnl_heatmap(proj["grid"]))
 
     with hedge_tab:
         st.caption("Uses the book from the **Book risk** tab. Searches futures, single calls or puts, call + put "
@@ -516,7 +546,7 @@ with tab_strat:
                                     format_func=lambda i: f"{i + 1}. {hg['hedges'][i]['label']}")
                 x = hg["hedges"][pick]
                 left, right = st.columns([3, 2])
-                left.plotly_chart(charts.hedge_payoff(hg, pick), use_container_width=True)
+                show(charts.hedge_payoff(hg, pick), left)
                 right.markdown("**Trades to place**")
                 right.dataframe(pd.DataFrame(x["legs"]).rename(columns={"price": "fill price"}).style.format(
                     {"fill price": "{:,.2f}", "bid": "{:,.2f}", "ask": "{:,.2f}"}), hide_index=True,
@@ -525,7 +555,7 @@ with tab_strat:
                         else f"extra margin ₹{x['extra_margin']:,.0f}")
                 right.caption(f"Premium ₹{x['premium']:,.0f} · {mtxt} · charges ₹{x['charges']:,.0f}. "
                               f"{hg['note']}")
-                st.plotly_chart(charts.hedge_bar(hg), use_container_width=True)
+                show(charts.hedge_bar(hg))
             else:
                 st.warning("No hedge fits this budget.")
 
@@ -567,3 +597,84 @@ with tab_agent:
                     st.session_state.chat.append({"role": "assistant", "content": reply["answer"]})
                 except PricingAPIError as exc:
                     show_error(exc)
+
+# ------------------------------------------------------------------ daily feed (email)
+with tab_feed:
+    left, right = st.columns([2, 3], gap="large")
+    with left:
+        ui.card("NIFTY options daily, by email",
+                "One email after each trading day with the numbers on this dashboard: ATM implied vol and its daily "
+                "change, skew (25-delta risk reversal and butterfly), the expected move to each expiry, "
+                "market-implied odds, reference prices with Greeks, open interest, futures basis and rates, and the "
+                "data-quality checks behind them. Market information only, no trade ideas.")
+        st.write("")
+        with st.form("subscribe", clear_on_submit=False):
+            st.markdown("**Subscribe**")
+            s_name = st.text_input("Name", max_chars=80, placeholder="Your name")
+            s_email = st.text_input("Email", max_chars=254, placeholder="name@company.com")
+            s_consent = st.checkbox("I want to receive the daily options market feed by email. I understand it is "
+                                    "market information, not investment advice, and I can unsubscribe at any time.")
+            go_sub = st.form_submit_button("Subscribe", type="primary", use_container_width=True)
+        if go_sub:
+            try:
+                r = client.feed_subscribe(s_email, s_name, s_consent)
+                (st.success if r["status"] in ("pending", "active") else st.error)(r["message"])
+            except PricingAPIError as exc:
+                show_error(exc)
+        st.caption("Double opt-in: the subscription starts only after the reader clicks the link in the "
+                   "confirmation email. Every feed email has a one-click unsubscribe link.")
+
+    with right:
+        st.markdown("**Preview of today's email**")
+        pv1, pv2 = st.columns([3, 1])
+        p_name = pv1.text_input("Greeting name for the preview", value="", placeholder="optional",
+                                label_visibility="collapsed")
+        if pv2.button("Build preview", use_container_width=True) or "feed_preview" in st.session_state:
+            try:
+                if "feed_preview" not in st.session_state or st.session_state.get("feed_preview_name") != p_name:
+                    with st.spinner("Building today's feed..."):
+                        st.session_state["feed_preview"] = client.feed_preview(p_name)
+                        st.session_state["feed_preview_name"] = p_name
+                components.html(st.session_state["feed_preview"], height=1100, scrolling=True)
+                st.download_button("Download preview (HTML)", st.session_state["feed_preview"],
+                                   file_name="nifty_options_daily_preview.html", mime="text/html")
+            except PricingAPIError as exc:
+                show_error(exc)
+        else:
+            st.info("Press **Build preview** to render today's email with live numbers.")
+
+    with st.expander("Admin: subscribers and sending"):
+        key = st.text_input("Admin key", type="password", help="Needed only if FEED_ADMIN_KEY is set in .env")
+        try:
+            fs = client.feed_status(key)
+            a1, a2, a3, a4 = st.columns(4)
+            a1.metric("Active", fs["counts"]["active"])
+            a2.metric("Awaiting confirmation", fs["counts"]["pending"])
+            a3.metric("Unsubscribed", fs["counts"]["unsubscribed"])
+            ls = fs.get("last_send") or {}
+            a4.metric("Last send", ls.get("date", "never"),
+                      f"{ls.get('sent', 0)} sent, {ls.get('failed', 0)} failed" if ls else None, delta_color="off", delta_arrow="off")
+            st.caption(f"Mail: {fs['mail']} · links point to {fs['public_url']}")
+            subs = client.feed_subscribers(key)["subscribers"]
+            if subs:
+                st.dataframe(pd.DataFrame(subs)[["email", "name", "status", "created_at", "confirmed_at",
+                                                 "unsubscribed_at", "source"]], hide_index=True,
+                             use_container_width=True)
+            t1, t2 = st.columns([3, 1])
+            test_to = t1.text_input("Send a test copy to", placeholder="you@company.com")
+            if t2.button("Send test", use_container_width=True) and test_to:
+                st.info(client.feed_send([test_to], admin_key=key)["message"])
+            b1, b2 = st.columns([3, 1])
+            sure = b1.checkbox(f"Send today's feed to all {fs['counts']['active']} active subscribers now")
+            if b2.button("Send to all", type="primary", disabled=not sure, use_container_width=True):
+                st.info(client.feed_send(admin_key=key)["message"])
+            d1, d2 = st.columns([3, 1])
+            del_email = d1.text_input("Erase a subscriber (removes all their data)", placeholder="email")
+            if d2.button("Erase", use_container_width=True) and del_email:
+                st.info("Erased." if client.feed_delete(del_email, key)["deleted"] else "No such subscriber.")
+        except PricingAPIError as exc:
+            show_error(exc)
+
+    st.warning("**Not investment advice.** The feed is market information and analytics for education and "
+               "research. It is not a recommendation to buy, sell or hold any security or derivative, and the "
+               "author accepts no responsibility for any loss or gain from using it.")
