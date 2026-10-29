@@ -28,11 +28,18 @@ def get_setting(name: str, default: str = "") -> str:
 _get = get_setting  # backwards-compatible name
 
 
+REPLAYS = {  # recorded Upstox snapshots: (responses, matching instrument records)
+    "20261023": ("upstox_live_nifty_20261023_full.json", "upstox_instruments_sample.json"),
+    "20261029": ("upstox_live_nifty_4exp_20261029.json", "upstox_instruments_20261029.json"),
+}
+
+
 @dataclass
 class Settings:
     data_mode: str = field(default_factory=lambda: get_setting("DATA_MODE", "replay").lower())
-    snapshot_path: Path = FIX / "upstox_live_nifty_20261023_full.json"
-    instruments_path: Path = FIX / "upstox_instruments_sample.json"
+    # replay data: REPLAY_SNAPSHOT=20261029 in .env switches to the four-expiry snapshot of 29 Oct 2026
+    snapshot_path: Path = field(default_factory=lambda: FIX / REPLAYS[get_setting("REPLAY_SNAPSHOT", "20261023")][0])
+    instruments_path: Path = field(default_factory=lambda: FIX / REPLAYS[get_setting("REPLAY_SNAPSHOT", "20261023")][1])
     fbil_ois_path: Path = FIX / "fbil_miborois_20261001_20261023.json"
     fbil_overnight_path: Path = FIX / "fbil_ovnmibor_20261001_20261023.json"
     history_path: Path = FIX / "index_history_20150101_20261023.csv"

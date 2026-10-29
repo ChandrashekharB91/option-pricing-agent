@@ -39,8 +39,9 @@ No administrator rights are needed. `.streamlit/config.toml` keeps the dashboard
 cancel it and the dashboard still works at http://localhost:8501. `python -m streamlit` also works where IT
 policy blocks `streamlit.exe` in the user's Scripts folder.
 
-`DATA_MODE=replay` (default) serves the recorded 23 Oct 2026 NIFTY snapshot, so everything works offline and
-outside market hours. `DATA_MODE=live` uses Upstox and FBIL; surfaces are cached for 60 seconds.
+`DATA_MODE=replay` (default) serves a recorded NIFTY snapshot, so everything works offline and outside market
+hours. `REPLAY_SNAPSHOT=20261023` (default) is one weekly expiry; `REPLAY_SNAPSHOT=20261029` is the live snapshot of
+29 Oct 2026 with four expiries (3, 9, 17 and 23 Nov), for pricing across expiries. `DATA_MODE=live` uses Upstox and FBIL; surfaces are cached for 60 seconds.
 
 | Endpoint | What it returns |
 | --- | --- |

@@ -75,6 +75,9 @@ TOLERANCES: list[tuple[str, str, Tol]] = [
     ("book", "*", Tol(1e-8, 1e-4, "Greeks: 0.01% relative")),
     ("risk", "pnl_explain/*", Tol(1.0, 0, "Rs 1 per P&L component")),
     ("strategies", "*", Tol(1.0, 1e-4, "Rs 1 or 0.01%: projections integrate over a fitted smile")),
+    ("live_4exp", "*/forward", Tol(1e-6, 0, "median of parity forwards: arithmetic only")),
+    ("live_4exp", "price/*/price", Tol(1e-3, 0, "0.001 index points")),
+    ("live_4exp", "*", Tol(1e-4, 0, "optimiser output: 0.01 vol point")),
     ("risk", "*", Tol(1e-6, 1e-4, "0.01% relative")),
 ]
 
@@ -286,6 +289,32 @@ def _strategies(svc) -> dict:
     return out
 
 
+def _live_4exp(svc) -> dict:
+    """Live 29 Oct 2026 snapshot, four expiries: fits, calendar check, and prices including an unlisted expiry."""
+    from .config import FIX as _FIX, Settings
+    from .service import PricingService
+
+    s4 = PricingService(Settings(data_mode="replay", snapshot_path=_FIX / "upstox_live_nifty_4exp_20261029.json",
+                                 instruments_path=_FIX / "upstox_instruments_20261029.json"))
+    surf = s4.surface("NIFTY")
+    out = {"calendar_violations": len(surf.calendar)}
+    for sm in surf.smiles:
+        e = sm.slice.expiry
+        out[f"{e}/forward"] = sm.forward
+        out[f"{e}/fit_status"] = sm.fit.status
+        out[f"{e}/fit_points"] = len(sm.fit.k)
+        out[f"{e}/svi_atm_vol"] = float(sm.fit.vol_k(0.0))
+        out[f"{e}/svi_rmse"] = sm.fit.rmse
+    for exp in ("2026-11-03", "2026-11-12", "2026-11-23"):
+        for typ, k in (("call", 23000), ("put", 22800)):
+            p = s4.price("NIFTY", exp, k, typ, 1)
+            out[f"price/{exp}/{k}{typ[0].upper()}/price"] = p["result"]["price"]
+            out[f"price/{exp}/{k}{typ[0].upper()}/vol"] = p["result"]["vol"]
+            out[f"price/{exp}/{k}{typ[0].upper()}/vol_source"] = p["result"]["vol_source"]
+            out[f"price/{exp}/{k}{typ[0].upper()}/released"] = p["validation"]["released"]
+    return out
+
+
 SECTIONS: dict[str, tuple[str, Callable]] = {  # name -> (what it freezes, function(svc))
     "black76": ("Black-76 price and 10 Greeks on a 420-case grid", lambda svc: _black76()),
     "implied_vol": ("implied vol recovered from grid prices", lambda svc: _implied_vol()),
@@ -297,6 +326,7 @@ SECTIONS: dict[str, tuple[str, Callable]] = {  # name -> (what it freezes, funct
     "book": ("sample book value and Greeks", _book),
     "risk": ("Phase 2: VaR, ES, backtest, stress, P&L explain on the sample book", _risk),
     "strategies": ("Phase 3: recommender, P&L projector and hedge finder", _strategies),
+    "live_4exp": ("live 29 Oct 2026 snapshot: 4 expiries, calendar check, unlisted-expiry prices", _live_4exp),
 }
 
 

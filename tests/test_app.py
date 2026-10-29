@@ -158,7 +158,11 @@ def test_agent_flags_invented_numbers(svc):
     assert reply.status == "WARN" and reply.released
 
 
-def test_agent_withholds_on_deterministic_fail(svc):
+def test_agent_withholds_on_deterministic_fail(svc, monkeypatch):
+    from test_svi_surface import steep_wings
+
+    bad = steep_wings(svc.surface("NIFTY"))
+    monkeypatch.setattr(svc, "_surface_for", lambda underlying, expiry: bad)
     llm = ScriptedLLM([call("t1", "price_option", price_args(27500, "call")), say("It is worth 0.45.")])
     reply = OptionPricingAgent(svc, llm=llm).ask("What is the 27500 call worth?")
     assert not reply.released and reply.status == "FAIL"

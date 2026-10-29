@@ -1,6 +1,6 @@
 # Regression report: PASS
 
-Run 2026-10-28T13:27:38+00:00 at commit 2bfabbd; golden values from 2026-10-28T13:22:34+00:00 (Recommendation rule: expected P&L > 0 and chance of profit >= 50%; rationale; 3-sd max profit).
+Run 2026-10-29T10:16:25+00:00 at commit eebf9ad; golden values from 2026-10-29T10:16:24+00:00 (SVI fit within +/-3 expected moves with vega weights; calendar check on the fits' common range; add live 29 Oct 4-expiry section).
 
 ## Golden values
 
@@ -15,6 +15,7 @@ Run 2026-10-28T13:27:38+00:00 at commit 2bfabbd; golden values from 2026-10-28T1
 | book | sample book value and Greeks | 6 | 0 | 0.00e+00 | PASS |
 | risk | Phase 2: VaR, ES, backtest, stress, P&L explain on the sample book | 23 | 0 | 0.00e+00 | PASS |
 | strategies | Phase 3: recommender, P&L projector and hedge finder | 30 | 0 | 0.00e+00 | PASS |
+| live_4exp | live 29 Oct 2026 snapshot: 4 expiries, calendar check, unlisted-expiry prices | 45 | 0 | 0.00e+00 | PASS |
 
 ## Benchmark gates
 
@@ -48,4 +49,7 @@ Run 2026-10-28T13:27:38+00:00 at commit 2bfabbd; golden values from 2026-10-28T1
 | book | `*` | abs 1e-08 + rel 0.0001 | Greeks: 0.01% relative |
 | risk | `pnl_explain/*` | abs 1 | Rs 1 per P&L component |
 | strategies | `*` | abs 1 + rel 0.0001 | Rs 1 or 0.01%: projections integrate over a fitted smile |
+| live_4exp | `*/forward` | abs 1e-06 | median of parity forwards: arithmetic only |
+| live_4exp | `price/*/price` | abs 0.001 | 0.001 index points |
+| live_4exp | `*` | abs 0.0001 | optimiser output: 0.01 vol point |
 | risk | `*` | abs 1e-06 + rel 0.0001 | 0.01% relative |

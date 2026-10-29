@@ -167,11 +167,46 @@ def test_live_off_grid_strike(live_surface):
     assert validate(res, live_surface).released
 
 
+def steep_wings(surface):
+    """Copy of a surface whose SVI wings are twice as steep: far strikes priced well above the market."""
+    import copy
+
+    out = copy.deepcopy(surface)
+    p = out.smiles[0].fit.params
+    out.smiles[0].fit.params = replace(p, b=min(2 * p.b, 1.99 / (1 + abs(p.rho))))
+    return out
+
+
 def test_validator_withholds_wing_price_above_listed_offer(live_surface):
+    # with the fitted smile the far wing is priced below every nearer offer
     res = price_option(live_surface, 27500, date(2026, 10, 27), "call")
     rep = validate(res, live_surface)
+    assert res.vol_source == "svi" and rep.released
+    assert any(c.name == "wing vs listed quotes" and c.status == "PASS" for c in rep.checks)
+    # a smile with over-steep wings prices it above a nearer listed offer: withheld
+    bad = steep_wings(live_surface)
+    res = price_option(bad, 27500, date(2026, 10, 27), "call")
+    rep = validate(res, bad)
     assert res.vol_source == "svi" and not rep.released
     assert any(c.name == "wing vs listed quotes" and c.status == "FAIL" for c in rep.checks)
+
+
+def test_fit_range_and_four_expiry_snapshot():
+    """Live 29 Oct 2026 snapshot: four expiries fit within +/-3 expected moves, no calendar arbitrage."""
+    src, _ = snapshot_source(FIX / "upstox_live_nifty_4exp_20261029.json", FIX / "upstox_instruments_20261029.json")
+    exps = [date(2026, 11, 3), date(2026, 11, 9), date(2026, 11, 17), date(2026, 11, 23)]
+    surf = build_surface(src, flat_curve(date(2026, 10, 29), 0.058), "NIFTY", expiries=exps)
+    assert surf.calendar == []
+    for sm in surf.smiles:
+        f = sm.fit
+        sd = sm.slice.atm_vol() * math.sqrt(sm.time_to_expiry)
+        assert f.status == "PASS" and f.rmse < 0.0025
+        assert f.fit_range[1] == pytest.approx(3 * sd, rel=0.02) and np.all(np.abs(f.k) <= f.fit_range[1] + 1e-12)
+        assert abs(float(f.vol_k(0.0)) - sm.slice.atm_vol()) < 0.0015  # ATM within 0.15 vol pt
+    weekly = surf.smiles[0]
+    assert weekly.fit.excluded > 40  # far-wing quotes left out of the fit ...
+    far = weekly.slice.strikes[-1]
+    assert weekly.vol(far)[1] == "market"  # ... but still priced at their own market vol
 
 
 def test_validator_catches_tampered_result(live_surface):

@@ -164,14 +164,19 @@ class VolSurface:
 
     # checks -----------------------------------------------------------------
     def calendar_check(self) -> list[CalendarViolation]:
+        """Total variance must not fall with maturity, checked where both fits have data: the overlap of the
+        two expiries' fit ranges (beyond the quotes, two extrapolated curves crossing is not a market fact)."""
         out = []
         for a, b in zip(self.smiles, self.smiles[1:]):
-            wa = a.fit.params.total_variance(_CAL_GRID)
-            wb = b.fit.params.total_variance(_CAL_GRID)
-            short = wa - wb
+            lo = max(a.fit.fit_range[0], b.fit.fit_range[0], _CAL_GRID[0])
+            hi = min(a.fit.fit_range[1], b.fit.fit_range[1], _CAL_GRID[-1])
+            if hi <= lo:
+                continue
+            grid = np.linspace(lo, hi, 121)
+            short = a.fit.params.total_variance(grid) - b.fit.params.total_variance(grid)
             i = int(np.argmax(short))
             if short[i] > CAL_TOL:
-                out.append(CalendarViolation((a.slice.expiry, b.slice.expiry), float(_CAL_GRID[i]), float(short[i])))
+                out.append(CalendarViolation((a.slice.expiry, b.slice.expiry), float(grid[i]), float(short[i])))
         return out
 
     @property

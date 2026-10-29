@@ -76,6 +76,8 @@ class SVIFit:
     weights: np.ndarray
     expiry: str = ""
     warnings: list = field(default_factory=list)
+    fit_range: tuple = (-math.inf, math.inf)  # log-moneyness range the fit used
+    excluded: int = 0  # QA-kept quotes outside that range (still priced at their own market vol)
 
     # model -----------------------------------------------------------------
     def vol_k(self, k):
@@ -209,8 +211,35 @@ def fit_svi(k, iv, T: float, *, weights=None, iv_bid=None, iv_ask=None, forward:
     return fit
 
 
-def fit_slice(vol_slice) -> SVIFit:
-    """Fit SVI to a ``VolSlice`` from ``optlib.slices.build_vol_slice``."""
+FIT_RANGE_SD = 3.0  # fit SVI within this many expected moves of the forward
+MIN_FIT_POINTS = 7
+
+
+def fit_slice(vol_slice, range_sd: float = FIT_RANGE_SD) -> SVIFit:
+    """Fit SVI to a ``VolSlice`` from ``optlib.slices.build_vol_slice``.
+
+    Fit range: quotes within ``range_sd`` expected moves (ATM vol x sqrt(T)) of the forward. Far-wing quotes
+    on short expiries are thin and carry little information; fitting them forces raw SVI to miss near the
+    money (on the live 3 Nov 2026 weekly, quotes ran to -9 sd and the ATM miss was 0.6 vol pts; within
+    +/-3 sd it is 0.1). Quotes outside the range are still priced at their own market vol.
+    Weights: Black vega (price sensitivity to vol), halved for quotes with no volume today."""
     s = vol_slice
-    return fit_svi(s.log_moneyness, s.iv_mid, s.time_to_expiry, weights=s.weights, iv_bid=s.iv_bid,
-                   iv_ask=s.iv_ask, forward=s.forward.forward, expiry=s.expiry)
+    k = s.log_moneyness
+    ok = np.isfinite(s.iv_mid) & (s.iv_mid > 0)
+    atm = float(np.interp(0.0, k[ok], s.iv_mid[ok])) if ok.sum() >= 2 else float(np.nanmedian(s.iv_mid))
+    sd = atm * math.sqrt(s.time_to_expiry)
+    half = range_sd * sd
+    inside = ok & (np.abs(k) <= half)
+    if inside.sum() < MIN_FIT_POINTS:  # too few near the money: take the nearest points instead
+        idx = np.argsort(np.where(ok, np.abs(k), np.inf))[:MIN_FIT_POINTS]
+        inside = np.zeros_like(ok)
+        inside[idx] = True
+        half = float(np.max(np.abs(k[inside])))
+    vega = np.nan_to_num(np.asarray(s.vega, float), nan=0.0)
+    w = np.maximum(vega / max(vega[inside].max(), 1e-12), 1e-3)
+    w = np.where(s.no_volume, 0.5 * w, w)
+    fit = fit_svi(k[inside], s.iv_mid[inside], s.time_to_expiry, weights=w[inside], iv_bid=s.iv_bid[inside],
+                  iv_ask=s.iv_ask[inside], forward=s.forward.forward, expiry=s.expiry)
+    fit.fit_range = (-half, half)
+    fit.excluded = int(ok.sum() - inside.sum())
+    return fit
