@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -23,6 +24,7 @@ from .mailer import Mailer, MailSettings, build_message
 from .subscribers import CONSENT_TEXT, SubscriberStore, SubscriptionError, normalise_email
 
 FEED_DIR = ROOT / "data" / "feed"
+log = logging.getLogger("uvicorn.error")  # shows in the API console
 
 
 class FeedJobs:
@@ -43,10 +45,12 @@ class FeedJobs:
     # sign-up ----------------------------------------------------------------
     def subscribe(self, email: str, name: str = "", consent: bool = False, source: str = "dashboard") -> dict:
         sub = self.store.subscribe(email, name, consent, source)
+        log.info("feed sign-up %s -> %s (list %s)", sub.email, sub.status, self.store.path.resolve())
         if sub.status == "active":
             return {"status": "active", "email": sub.email,
                     "message": f"{sub.email} is already subscribed; nothing to do."}
         res = Mailer(self.mail).send([self._confirmation(sub)])[0]
+        log.info("feed confirmation to %s: %s", sub.email, res.get("file") or ("sent" if res["ok"] else res["error"]))
         if not res["ok"]:
             return {"status": "error", "email": sub.email, "message": f"could not send the confirmation: {res['error']}"}
         where = " (outbox mode: saved in data/feed/outbox, not emailed)" if self.mail.mode == "outbox" else ""
@@ -132,6 +136,7 @@ class FeedJobs:
     def status(self) -> dict:
         log = self._log()
         return {"mail": self.mail.describe(), "mode": self.mail.mode, "public_url": self.public_url,
+                "subscriber_db": str(self.store.path.resolve()),
                 "counts": self.store.counts(), "last_send": log[-1] if log else None,
                 "admin_key_required": bool(self.admin_key)}
 

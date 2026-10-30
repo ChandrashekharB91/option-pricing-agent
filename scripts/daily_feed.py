@@ -71,6 +71,7 @@ def main() -> int:
     if a.signup:
         return open_signup(jobs.public_url)
     print(f"Data: {svc.mode} · mail: {jobs.mail.describe()}")
+    print(f"Subscriber list: {jobs.store.path.resolve()}")
 
     if a.subscribers:
         subs = jobs.store.all()

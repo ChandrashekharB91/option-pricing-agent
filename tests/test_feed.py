@@ -132,8 +132,10 @@ def test_end_to_end_outbox(svc, tmp_path):
     assert again["skipped"]  # once per day
     test = jobs.send(to=["me@example.com"])
     assert test["kind"] == "test" and test["sent"] == 1
-    mails = sorted((tmp_path / "outbox").glob("*.eml"))
-    daily = email.message_from_bytes(mails[-2].read_bytes())
+    mails = [email.message_from_bytes(f.read_bytes()) for f in (tmp_path / "outbox").glob("*.eml")]
+    assert len(mails) == 3  # confirmation, daily, test: none overwritten
+    daily = next(m for m in mails if m["To"] == "reader@example.com" and m["Subject"].startswith("NIFTY options daily,")
+                 and "[TEST]" not in m["Subject"])
     assert "unsubscribe?token=" + token in daily["List-Unsubscribe"]
     assert (tmp_path / "history.jsonl").exists() and jobs.status()["counts"]["active"] == 1
 

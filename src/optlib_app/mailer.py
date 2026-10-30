@@ -19,6 +19,7 @@ import re
 import smtplib
 import ssl
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from email import policy
 from email.message import EmailMessage
@@ -108,7 +109,7 @@ class Mailer:
         results = []
         if self.s.mode == "outbox":
             self.s.outbox.mkdir(parents=True, exist_ok=True)
-            stamp = time.strftime("%Y%m%d_%H%M%S")
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")  # microseconds: two sends in one second never collide
             for i, m in enumerate(messages):
                 safe = re.sub(r"[^A-Za-z0-9._-]", "_", m["To"])
                 path = self.s.outbox / f"{stamp}_{i:03d}_{safe}.eml"
