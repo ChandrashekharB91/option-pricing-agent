@@ -8,18 +8,37 @@ PricingService, so a number is identical wherever it is shown.
 from __future__ import annotations
 
 import secrets
+from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from optlib.data.upstox import UpstoxError
 
 from .service import PricingService, ServiceError
 
-app = FastAPI(title="Option Pricing Agent API", version="0.1.0",
+@asynccontextmanager
+async def _lifespan(_app):
+    """Start the automatic daily feed send with the API (it stays off unless live data and email are set up)."""
+    import logging
+
+    from .feed_jobs import AutoSender
+
+    auto = None
+    try:
+        auto = AutoSender(get_feed(get_service()))
+        auto.start()
+    except Exception as exc:  # noqa: BLE001 - the API must start even if the feed is misconfigured
+        logging.getLogger("uvicorn.error").warning("feed: automatic send not started: %s", exc)
+    yield
+    if auto:
+        auto.stop()
+
+
+app = FastAPI(lifespan=_lifespan, title="Option Pricing Agent API", version="0.1.0",
               description="In-house option pricing: market data, smiles, prices, Greeks, validation, book risk.")
 
 _service: Optional[PricingService] = None
@@ -278,12 +297,10 @@ def feed_subscribe(req: SubscribeRequest, feed=Depends(get_feed)):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/feed/signup", response_class=HTMLResponse)
+@app.get("/feed/signup")
 def feed_signup_form():
-    """Sign-up page for readers: open http://<api address>/feed/signup in a browser."""
-    from .feed_jobs import signup_page
-
-    return signup_page()
+    """The sign-up page moved to the website (/signup); old links keep working."""
+    return RedirectResponse("/signup", status_code=307)
 
 
 @app.post("/feed/signup", response_class=HTMLResponse)
@@ -358,3 +375,9 @@ def feed_send(req: SendRequest, feed=Depends(get_feed)):
         return _call(feed.send, req.to, req.force)
     except SubscriptionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------ reader website and automatic daily send
+from .site import router as _site_router  # noqa: E402
+
+app.include_router(_site_router)

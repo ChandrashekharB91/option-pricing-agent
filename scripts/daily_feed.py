@@ -2,7 +2,7 @@
 
     python scripts/daily_feed.py                           # same as --preview
     python scripts/daily_feed.py --preview                 # writes reports/feed/feed_YYYYMMDD.html, opens it; sends nothing
-    python scripts/daily_feed.py --signup                  # opens the readers' sign-up page (the API must be running)
+    python scripts/daily_feed.py --signup                  # opens the reader website: sign up, log in (the API must be running)
     python scripts/daily_feed.py --test you@example.com    # sends one copy marked [TEST] to that address
     python scripts/daily_feed.py --send                    # sends to every active subscriber (once per day)
     python scripts/daily_feed.py --subscribers             # lists subscribers (no tokens)
@@ -34,7 +34,7 @@ def open_signup(base: str) -> int:
     """Open the sign-up page served by the API; explain how to start the API if it is not running."""
     import requests
 
-    url = f"{base}/feed/signup"
+    url = f"{base}/"
     try:
         requests.get(f"{base}/health", timeout=3).raise_for_status()
     except requests.RequestException:

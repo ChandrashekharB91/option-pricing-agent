@@ -40,7 +40,51 @@ class FeedJobs:
 
     # links ------------------------------------------------------------------
     def link(self, action: str, token: str) -> str:
-        return f"{self.public_url}/feed/{action}?token={quote(token)}"
+        path = {"confirm": "verify", "reset": "reset"}.get(action, f"feed/{action}")  # website pages
+        return f"{self.public_url}/{path}?token={quote(token)}"
+
+    def _simple_email(self, to: str, subject: str, heading: str, paragraphs: list[str], button: tuple[str, str],
+                      unsub: str = "") -> object:
+        label, url = button
+        paras = "".join(f'<p style="margin:0 0 14px">{p}</p>' for p in paragraphs)
+        text = "\n\n".join([heading] + [html.unescape(p) for p in paragraphs] + [f"{label}: {url}", DISCLAIMER])
+        body = f"""<!doctype html><html><body style="margin:0;background:#f1f5f9;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 12px">
+<table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background:#fff;border:1px solid #e2e8f0;border-radius:14px">
+<tr><td style="background:#0b1220;padding:20px 26px;border-radius:14px 14px 0 0;color:#a5b4fc;font-size:12px;font-weight:700;letter-spacing:.14em">NIFTY OPTIONS DAILY</td></tr>
+<tr><td style="padding:26px;font-size:15px;line-height:1.6;color:#0f172a"><h2 style="margin:0 0 14px;font-size:20px">{html.escape(heading)}</h2>{paras}
+<p style="margin:6px 0 22px"><a href="{html.escape(url)}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600">{html.escape(label)}</a></p>
+<p style="margin:0;font-size:12px;color:#64748b;line-height:1.5"><b>Not investment advice.</b> {html.escape(DISCLAIMER)}</p>
+</td></tr></table></td></tr></table></body></html>"""
+        return build_message(self.mail, to, subject, body, text, unsubscribe_url=unsub)
+
+    def send_reset(self, email: str) -> dict:
+        """Email a one-hour password-reset link. Unknown addresses get the same answer (no account probing)."""
+        s = self.store.start_reset(email)
+        if s:
+            msg = self._simple_email(s.email, "Reset your NIFTY options daily password", "Reset your password",
+                                     ["Someone asked to reset the password for this address. The link works for one "
+                                      "hour. If it was not you, ignore this email: nothing changes."],
+                                     ("Choose a new password", self.link("reset", s.reset_token)))
+            res = Mailer(self.mail).send([msg])[0]
+            log.info("feed password reset for %s: %s", s.email, res.get("file") or ("sent" if res["ok"] else res["error"]))
+        where = " (outbox mode: saved in data/feed/outbox, not emailed)" if self.mail.mode == "outbox" else ""
+        return {"message": f"If an account exists for that address, a reset link is on its way{where}."}
+
+    def create_account(self, email: str, name: str, password: str, consent: bool) -> dict:
+        sub = self.store.create_account(email, name, password, consent)
+        log.info("feed account %s -> %s", sub.email, sub.status)
+        if sub.verified:
+            return {"status": "active", "email": sub.email, "message": "Account created. You are already receiving the daily email."}
+        res = Mailer(self.mail).send([self._confirmation(sub)])[0]
+        log.info("feed confirmation to %s: %s", sub.email, res.get("file") or ("sent" if res["ok"] else res["error"]))
+        if not res["ok"]:
+            return {"status": "error", "email": sub.email, "message": f"Account created, but the verification email "
+                                                                      f"could not be sent: {res['error']}"}
+        where = " (outbox mode: saved in data/feed/outbox, not emailed)" if self.mail.mode == "outbox" else ""
+        return {"status": "pending", "email": sub.email,
+                "message": f"Account created. We sent a verification link to {sub.email}{where}; the daily email "
+                           "starts once you click it."}
 
     # sign-up ----------------------------------------------------------------
     def subscribe(self, email: str, name: str = "", consent: bool = False, source: str = "dashboard") -> dict:
@@ -61,7 +105,7 @@ class FeedJobs:
     def _confirmation(self, sub):
         confirm, unsub = self.link("confirm", sub.token), self.link("unsubscribe", sub.token)
         name = f" {sub.name}" if sub.name else ""
-        text = (f"Hi{name},\n\nPlease confirm your subscription to the NIFTY options daily feed:\n{confirm}\n\n"
+        text = (f"Hi{name},\n\nPlease verify your email for the NIFTY options daily feed:\n{confirm}\n\n"
                 f"If you did not sign up, ignore this email and nothing will be sent.\n\n{CONSENT_TEXT}\n\n{DISCLAIMER}\n")
         body = f"""<!doctype html><html><body style="margin:0;background:#f1f5f9;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:28px 12px">
@@ -70,11 +114,11 @@ class FeedJobs:
 <tr><td style="padding:26px;font-size:15px;line-height:1.6;color:#0f172a">
 <p style="margin:0 0 14px">Hi{html.escape(name)},</p>
 <p style="margin:0 0 20px">Please confirm that you want the daily email with NIFTY option-market numbers: implied volatility, skew, expected moves, reference prices and open interest.</p>
-<p style="margin:0 0 22px"><a href="{html.escape(confirm)}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600">Confirm subscription</a></p>
+<p style="margin:0 0 22px"><a href="{html.escape(confirm)}" style="display:inline-block;background:#4f46e5;color:#fff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:600">Verify my email</a></p>
 <p style="margin:0 0 14px;font-size:13px;color:#64748b">If you did not sign up, ignore this email and nothing will be sent. You can unsubscribe at any time from any feed email.</p>
 <p style="margin:0;font-size:12px;color:#64748b;line-height:1.5"><b>Not investment advice.</b> {html.escape(DISCLAIMER)}</p>
 </td></tr></table></td></tr></table></body></html>"""
-        return build_message(self.mail, sub.email, "Confirm your NIFTY options daily subscription", body, text,
+        return build_message(self.mail, sub.email, "Verify your email for NIFTY options daily", body, text,
                              unsubscribe_url=unsub)
 
     def confirm(self, token: str) -> Optional[object]:
@@ -192,3 +236,61 @@ ul{{margin:0 0 6px;padding-left:18px;color:var(--muted);font-size:14px;line-heig
 <button type="submit">Subscribe</button></form>
 <div class="d">We send a confirmation link first; nothing else arrives until you click it. Every email has a one-click
 unsubscribe link. <b>Not investment advice.</b> {html.escape(DISCLAIMER)}</div></div></div></body></html>"""
+
+
+class AutoSender:
+    """Sends the daily feed from inside the running API, so no Task Scheduler is needed.
+
+    FEED_AUTO_SEND   on | off | auto (default): auto = on when DATA_MODE=live and an SMTP server is configured
+    FEED_SEND_TIME   HH:MM IST (default 15:20, ten minutes before the close, while quotes are live)
+    Sends once per trading day (Mon-Fri), between FEED_SEND_TIME and 17:00 IST, if the API is running then.
+    """
+
+    def __init__(self, jobs: "FeedJobs", get=get_setting):
+        import threading
+
+        self.jobs = jobs
+        mode = get("FEED_AUTO_SEND", "auto").lower()
+        live = jobs.svc.mode == "live"
+        self.enabled = mode == "on" or (mode == "auto" and live and jobs.mail.mode == "smtp")
+        hh, mm = (get("FEED_SEND_TIME", "15:20") or "15:20").split(":")
+        self.at = (int(hh), int(mm))
+        self._done: set = set()  # days already handled by this process (sent, or nobody to send to)
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="feed-auto-send", daemon=True)
+
+    def describe(self) -> str:
+        if not self.enabled:
+            return "automatic daily send is off (needs DATA_MODE=live and SMTP settings, or FEED_AUTO_SEND=on)"
+        return f"automatic daily send on: weekdays from {self.at[0]:02d}:{self.at[1]:02d} IST while the API runs"
+
+    def start(self) -> None:
+        log.info("feed: %s", self.describe())
+        if self.enabled:
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def due(self, now) -> bool:
+        start = now.replace(hour=self.at[0], minute=self.at[1], second=0, microsecond=0)
+        end = now.replace(hour=17, minute=0, second=0, microsecond=0)
+        day = now.date().isoformat()
+        return (now.weekday() < 5 and start <= now < end and day not in self._done
+                and not self.jobs.sent_today(day))
+
+    def _run(self) -> None:
+        from zoneinfo import ZoneInfo
+
+        ist = ZoneInfo("Asia/Kolkata")
+        while not self._stop.wait(30):
+            now = datetime.now(ist)
+            if not self.due(now):
+                continue
+            try:
+                res = self.jobs.send()
+                self._done.add(now.date().isoformat())
+                log.info("feed auto-send %s: %s", now.date(), res["message"])
+            except Exception as exc:  # noqa: BLE001 - keep the API up; try again in 10 minutes
+                log.error("feed auto-send failed: %s", exc)
+                self._stop.wait(600)

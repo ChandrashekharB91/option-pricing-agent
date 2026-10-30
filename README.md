@@ -177,9 +177,18 @@ no trade ideas (the strategy recommender stays on the internal dashboard) and ev
 not-investment-advice disclaimer and a one-click unsubscribe link. The layout works in light and dark mail
 clients and on phones.
 
-**Sign-up.** Readers open the sign-up page at `http://127.0.0.1:8000/feed/signup` (with the API running;
-`python scripts/daily_feed.py --signup` opens it), or use the dashboard's *Daily feed* tab. Readers tick a consent box; a
-confirmation email goes out and the subscription starts only when they click it (double opt-in). Unsubscribe
+**Reader website.** The API serves a small website at its root address, `http://127.0.0.1:8000/`: a landing
+page, sign-up with email and password, email verification, log-in, password reset, and an account page where
+readers switch the daily email on or off, read today's issue in the browser, change their password or delete
+their account. Passwords are stored only as scrypt hashes; sessions are HttpOnly cookies; forms carry CSRF tokens;
+repeated wrong passwords are slowed down. `python scripts/daily_feed.py --signup` opens the site, and the
+dashboard's *Daily feed* tab still offers a quick sign-up.
+
+**Automatic sending.** With `DATA_MODE=live` and SMTP settings in `.env`, the running API sends the feed by
+itself on weekdays from 15:20 IST (`FEED_SEND_TIME`), once a day; `FEED_AUTO_SEND=off` disables it. The API
+console prints whether it is on when it starts. The Task Scheduler route below is only needed if the API is not
+left running. Readers tick a consent box; a
+verification email goes out and the subscription starts only when they click it (double opt-in). Unsubscribe
 links are personal; admins can also erase a subscriber completely. Subscribers live in `data/feed/subscribers.db`
 (git-ignored).
 

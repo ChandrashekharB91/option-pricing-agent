@@ -123,7 +123,7 @@ def test_end_to_end_outbox(svc, tmp_path):
     assert r["status"] == "pending"
     conf = email.message_from_bytes(next((tmp_path / "outbox").glob("*.eml")).read_bytes())
     body = next(p for p in conf.walk() if p.get_content_type() == "text/plain").get_payload(decode=True).decode()
-    token = re.search(r"https://desk\.example/feed/confirm\?token=([\w-]+)", body).group(1)
+    token = re.search(r"https://desk\.example/verify\?token=([\w-]+)", body).group(1)
     assert jobs.send()["message"] == "no active subscribers yet"  # nothing goes out before confirmation
     jobs.confirm(token)
     out = jobs.send()
@@ -158,8 +158,8 @@ def test_api_feed_flow(svc, tmp_path, monkeypatch):
         assert c.get("/feed/subscribers").json()["counts"]["active"] == 1
         assert "NIFTY OPTIONS DAILY" in c.get("/feed/preview").text.upper()
         assert "unsubscribed" in c.post("/feed/unsubscribe", params={"token": token}).text
-        page = c.get("/feed/signup")
-        assert page.status_code == 200 and 'name="consent"' in page.text
+        page = c.get("/feed/signup")  # old address forwards to the website's sign-up page
+        assert page.status_code == 200 and 'name="password2"' in page.text
         bad = c.post("/feed/signup", content="email=new%40y.com&name=N", headers={"content-type": "application/x-www-form-urlencoded"})
         assert bad.status_code == 400 and "consent" in bad.text and "new@y.com" in bad.text
         ok = c.post("/feed/signup", content="email=new%40y.com&name=N&consent=yes",
@@ -174,3 +174,82 @@ def test_api_feed_flow(svc, tmp_path, monkeypatch):
         assert c.get("/feed/subscribers", headers={"X-Admin-Key": "k3y"}).status_code == 200
     finally:
         api.app.dependency_overrides.clear()
+
+
+def test_website_accounts(svc, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from optlib_app import api, site
+
+    jobs = FeedJobs(svc, feed_dir=tmp_path, get=_settings({"FEED_PUBLIC_URL": "http://desk.example"}))
+    api.app.dependency_overrides[api.get_service] = lambda: svc
+    api.app.dependency_overrides[api.get_feed] = lambda: jobs
+    form = {"content-type": "application/x-www-form-urlencoded"}
+    site._failures.clear()
+    try:
+        c = TestClient(api.app)
+        assert "Create a free account" in c.get("/").text
+        assert "do not match" in c.post("/signup", content="name=A&email=a%40x.com&password=secret123&password2=other123"
+                                         "&consent=yes", headers=form).text
+        assert "at least 8" in c.post("/signup", content="email=a%40x.com&password=short&password2=short&consent=yes",
+                                      headers=form).text
+        r = c.post("/signup", content="name=Asha&email=a%40x.com&password=secret123&password2=secret123&consent=yes",
+                   headers=form)
+        assert r.status_code == 200 and "Hello, Asha" in r.text and "Verify your email first" in r.text
+        acct = jobs.store.get("a@x.com")
+        assert acct.has_account and acct.status == "pending" and "secret123" not in (acct.password_hash or "")
+        assert "already exists" in c.post("/signup", content="email=a%40x.com&password=secret123&password2=secret123"
+                                          "&consent=yes", headers=form).text
+        # verification link from the email activates the daily email
+        mail = email.message_from_bytes(sorted((tmp_path / "outbox").glob("*.eml"))[-1].read_bytes())
+        body = next(p for p in mail.walk() if p.get_content_type() == "text/plain").get_payload(decode=True).decode()
+        token = re.search(r"/verify\?token=([\w-]+)", body).group(1)
+        assert "You receive the email" in c.get("/verify", params={"token": token}).text
+        assert jobs.store.get("a@x.com").status == "active"
+        # account actions need the form token
+        assert "form expired" in c.post("/account", content="action=off&csrf=bad", headers=form).text
+        csrf = site._csrf(c.cookies.get(site.COOKIE))
+        assert "switched off" in c.post("/account", content=f"action=off&csrf={csrf}", headers=form).text
+        assert jobs.store.get("a@x.com").status == "unsubscribed"
+        assert "switched on" in c.post("/account", content=f"action=on&csrf={csrf}", headers=form).text
+        # log out, bad password, good password, brute-force brake
+        c.get("/logout")
+        assert c.get("/account").url.path == "/login"
+        assert "not recognised" in c.post("/login", content="email=a%40x.com&password=nope1234", headers=form).text
+        assert "Hello, Asha" in c.post("/login", content="email=A%40X.com&password=secret123", headers=form).text
+        c.get("/logout")
+        for _ in range(5):
+            c.post("/login", content="email=a%40x.com&password=wrong123", headers=form)
+        assert "Too many attempts" in c.post("/login", content="email=a%40x.com&password=secret123", headers=form).text
+        site._failures.clear()
+        # password reset by email; unknown addresses get the same answer
+        assert "If an account exists" in c.post("/forgot", content="email=nobody%40x.com", headers=form).text
+        c.post("/forgot", content="email=a%40x.com", headers=form)
+        reset = jobs.store.get("a@x.com").reset_token
+        assert "Password saved" in c.post("/reset", content=f"token={reset}&password=newpass99&password2=newpass99",
+                                          headers=form).text
+        assert "Link expired" in c.post("/reset", content=f"token={reset}&password=x2345678&password2=x2345678",
+                                        headers=form).text  # one use only
+        assert "Today" in c.get("/account/today").text
+        csrf = site._csrf(c.cookies.get(site.COOKIE))
+        c.post("/account", content=f"action=delete&csrf={csrf}", headers=form)
+        assert jobs.store.get("a@x.com") is None
+    finally:
+        api.app.dependency_overrides.clear()
+
+
+def test_auto_sender_schedule(svc, tmp_path):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from optlib_app.feed_jobs import AutoSender
+
+    jobs = FeedJobs(svc, feed_dir=tmp_path, get=_settings({}))
+    off = AutoSender(jobs, get=_settings({}))
+    assert not off.enabled  # replay data and no SMTP: never sends by itself
+    on = AutoSender(jobs, get=_settings({"FEED_AUTO_SEND": "on", "FEED_SEND_TIME": "15:20"}))
+    ist = ZoneInfo("Asia/Kolkata")
+    assert not on.due(datetime(2026, 10, 30, 15, 10, tzinfo=ist))  # before the time
+    assert on.due(datetime(2026, 10, 30, 15, 25, tzinfo=ist))  # Friday, in the window
+    assert not on.due(datetime(2026, 10, 31, 15, 25, tzinfo=ist))  # Saturday
+    assert not on.due(datetime(2026, 10, 30, 17, 5, tzinfo=ist))  # too late
