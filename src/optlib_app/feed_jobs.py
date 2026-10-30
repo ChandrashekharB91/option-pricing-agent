@@ -188,7 +188,6 @@ ul{{margin:0 0 6px;padding-left:18px;color:var(--muted);font-size:14px;line-heig
 <form method="post" action="signup">
 <label for="name">Name</label><input id="name" name="name" type="text" maxlength="80" value="{html.escape(name)}" autocomplete="name">
 <label for="email">Email</label><input id="email" name="email" type="email" maxlength="254" required value="{html.escape(email)}" autocomplete="email">
-<input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
 <label class="cb"><input type="checkbox" name="consent" value="yes" required> {html.escape(CONSENT_TEXT)}</label>
 <button type="submit">Subscribe</button></form>
 <div class="d">We send a confirmation link first; nothing else arrives until you click it. Every email has a one-click

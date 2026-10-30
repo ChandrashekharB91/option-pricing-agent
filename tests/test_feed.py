@@ -165,9 +165,10 @@ def test_api_feed_flow(svc, tmp_path, monkeypatch):
         ok = c.post("/feed/signup", content="email=new%40y.com&name=N&consent=yes",
                     headers={"content-type": "application/x-www-form-urlencoded"})
         assert ok.status_code == 200 and "confirmation link" in ok.text and jobs.store.get("new@y.com").status == "pending"
-        bot = c.post("/feed/signup", content="email=bot%40y.com&consent=yes&website=x",
-                     headers={"content-type": "application/x-www-form-urlencoded"})
-        assert bot.status_code == 200 and jobs.store.get("bot@y.com") is None
+        # browser autofill can fill extra fields (Chrome fills "website"); a real reader must never be dropped
+        auto = c.post("/feed/signup", content="email=auto%40y.com&consent=yes&website=https%3A%2F%2Fx.com",
+                      headers={"content-type": "application/x-www-form-urlencoded"})
+        assert auto.status_code == 200 and jobs.store.get("auto@y.com").status == "pending"
         jobs.admin_key = "k3y"
         assert c.get("/feed/subscribers").status_code == 403
         assert c.get("/feed/subscribers", headers={"X-Admin-Key": "k3y"}).status_code == 200

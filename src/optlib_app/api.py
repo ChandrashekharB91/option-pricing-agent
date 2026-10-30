@@ -295,8 +295,6 @@ async def feed_signup_submit(request: Request, feed=Depends(get_feed)):
 
     form = {k: v[0] for k, v in parse_qs((await request.body()).decode("utf-8", "replace")).items()}
     email, name = form.get("email", ""), form.get("name", "")
-    if form.get("website"):  # hidden field only bots fill in: answer as if it worked, send nothing
-        return signup_page("Thanks. Check your inbox for the confirmation link.")
     try:
         r = feed.subscribe(email, name, form.get("consent") == "yes", source="signup page")
     except SubscriptionError as exc:
