@@ -167,6 +167,34 @@ the projector. Each idea is settled at NIFTY's actual expiry close after charges
 The output is `reports/backtest_report.html` and `reports/backtest_summary.json`; per-trade rows go to
 `data/backtest/trades.csv.gz`.
 
+## Sharing the app (one link, everyone logs in)
+
+```powershell
+python scripts/share.py
+```
+
+One command starts the pricing API and the dashboard, opens a Cloudflare quick tunnel and prints a public
+`https://….trycloudflare.com` link. Anyone with the link creates an account (name, email, password; optional daily
+email), logs in and uses every tab on their own: the smile, pricer, book risk, VaR, the strategy lab and the hedge
+finder. Each person's work is separate. The first run downloads Cloudflare's `cloudflared` into `tools/` (no
+installer, no administrator rights).
+
+* **Accounts.** Passwords are stored as scrypt hashes; logins are remembered for 14 days; five wrong passwords
+  lock an address for 15 minutes; people can reset a forgotten password, switch the daily email on or off,
+  change their password or delete their account (*My account* tab).
+* **Email links** (verification, password reset, unsubscribe) point at the shared link. With SMTP set up, new
+  accounts must verify their email before using the app; without SMTP (outbox mode) nobody could, so the app opens
+  straight away.
+* **Admins** (`ADMIN_EMAILS`, default `SMTP_USER`) also see the subscriber list and sending controls. The AI agent
+  uses your LLM key, so it is admin-only unless `AGENT_FOR_ALL=on`.
+* **Limits of a quick tunnel.** The link changes every time `share.py` starts, the app is up only while this
+  computer and window are, and Cloudflare gives no uptime guarantee. Email links sent before a restart stop
+  working. For a fixed address, add a domain to Cloudflare, create a named tunnel to `http://127.0.0.1:8501` and
+  set `FEED_PUBLIC_URL` to it.
+* If Cloudflare cannot connect (office networks sometimes block port 7844), the script prints cloudflared's
+  messages; try `python scripts/share.py --protocol http2`. `python scripts/share.py --local` runs everything for
+  this computer only.
+
 ## Daily email feed
 
 A daily email for readers with the day's NIFTY option-market numbers: index level and India VIX, ATM implied

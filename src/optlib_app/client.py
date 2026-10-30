@@ -121,3 +121,10 @@ class PricingClient:
 
     def feed_send(self, to: Optional[list[str]] = None, force: bool = False, admin_key: str = ""):
         return self._req("POST", "/feed/send", json={"to": to, "force": force}, headers=self._admin(admin_key))
+
+    # accounts (shared dashboard) ------------------------------------------------
+    def auth(self, method: str, path: str, session: str = "", **payload):
+        kw = {"headers": {"X-Session": session}} if session else {}
+        if payload:
+            kw["json"] = payload
+        return self._req(method, f"/auth/{path}", **kw)

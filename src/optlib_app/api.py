@@ -272,7 +272,8 @@ def require_admin(request: Request, x_admin_key: Optional[str] = Header(default=
             raise HTTPException(status_code=403, detail="admin key required (X-Admin-Key header)")
         return
     host = request.client.host if request.client else ""
-    if host not in ("127.0.0.1", "::1", "localhost", "testclient"):
+    proxied = any(h in request.headers for h in ("cf-connecting-ip", "x-forwarded-for", "forwarded"))
+    if proxied or host not in ("127.0.0.1", "::1", "localhost", "testclient"):  # a tunnel looks local: check headers
         raise HTTPException(status_code=403, detail="set FEED_ADMIN_KEY to allow admin actions from other machines")
 
 
@@ -381,3 +382,6 @@ def feed_send(req: SendRequest, feed=Depends(get_feed)):
 from .site import router as _site_router  # noqa: E402
 
 app.include_router(_site_router)
+from .auth_api import router as _auth_router  # noqa: E402
+
+app.include_router(_auth_router)

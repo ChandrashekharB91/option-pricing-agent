@@ -35,13 +35,26 @@ class FeedJobs:
         self.mail = MailSettings.from_settings(get, self.dir / "outbox")
         self.public_url = (get("FEED_PUBLIC_URL", "") or get("PRICING_API_URL", "http://127.0.0.1:8000")).rstrip("/")
         self.admin_key = get("FEED_ADMIN_KEY", "")
+        self.links = get("FEED_LINKS", "site").lower()
+        # who may use admin screens in the shared app (comma-separated); default: the sending mailbox
+        admins = get("ADMIN_EMAILS", "") or get("SMTP_USER", "") or get("MAIL_FROM", "")
+        self.admins = {a.strip().lower() for a in admins.split(",") if a.strip()}
         self.history_path = self.dir / "history.jsonl"
         self.log_path = self.dir / "sent.jsonl"
 
     # links ------------------------------------------------------------------
     def link(self, action: str, token: str) -> str:
+        """Links in emails. FEED_LINKS=app points them at the dashboard (one shared address, see scripts/share.py);
+        the default points them at the API's website pages."""
+        if self.links == "app":
+            param = {"confirm": "verify", "reset": "reset", "unsubscribe": "unsubscribe"}.get(action, action)
+            return f"{self.public_url}/?{param}={quote(token)}"
         path = {"confirm": "verify", "reset": "reset"}.get(action, f"feed/{action}")  # website pages
         return f"{self.public_url}/{path}?token={quote(token)}"
+
+    @property
+    def signup_url(self) -> str:
+        return f"{self.public_url}/" if self.links == "app" else f"{self.public_url}/signup"
 
     def _simple_email(self, to: str, subject: str, heading: str, paragraphs: list[str], button: tuple[str, str],
                       unsub: str = "") -> object:
@@ -71,11 +84,11 @@ class FeedJobs:
         where = " (outbox mode: saved in data/feed/outbox, not emailed)" if self.mail.mode == "outbox" else ""
         return {"message": f"If an account exists for that address, a reset link is on its way{where}."}
 
-    def create_account(self, email: str, name: str, password: str, consent: bool) -> dict:
-        sub = self.store.create_account(email, name, password, consent)
+    def create_account(self, email: str, name: str, password: str, consent: bool, daily: bool = True) -> dict:
+        sub = self.store.create_account(email, name, password, consent, daily=daily)
         log.info("feed account %s -> %s", sub.email, sub.status)
         if sub.verified:
-            return {"status": "active", "email": sub.email, "message": "Account created. You are already receiving the daily email."}
+            return {"status": "active", "email": sub.email, "message": "Account created; your email was already verified."}
         res = Mailer(self.mail).send([self._confirmation(sub)])[0]
         log.info("feed confirmation to %s: %s", sub.email, res.get("file") or ("sent" if res["ok"] else res["error"]))
         if not res["ok"]:
@@ -83,8 +96,8 @@ class FeedJobs:
                                                                       f"could not be sent: {res['error']}"}
         where = " (outbox mode: saved in data/feed/outbox, not emailed)" if self.mail.mode == "outbox" else ""
         return {"status": "pending", "email": sub.email,
-                "message": f"Account created. We sent a verification link to {sub.email}{where}; the daily email "
-                           "starts once you click it."}
+                "message": f"Account created. We sent a verification link to {sub.email}{where}; click it to "
+                           "confirm your address" + ("; the daily email starts then." if daily else ".")}
 
     # sign-up ----------------------------------------------------------------
     def subscribe(self, email: str, name: str = "", consent: bool = False, source: str = "dashboard") -> dict:
@@ -133,8 +146,8 @@ class FeedJobs:
 
     def preview_html(self, feed: Optional[dict] = None, name: str = "") -> str:
         feed = feed or self.build()
-        return render(feed, unsubscribe_url=f"{self.public_url}/feed/unsubscribe?token=preview", images="data",
-                      recipient_name=name, signup_url=f"{self.public_url}/feed/signup").html
+        return render(feed, unsubscribe_url=self.link("unsubscribe", "preview"), images="data",
+                      recipient_name=name, signup_url=self.signup_url).html
 
     def sent_today(self, day: str) -> bool:
         return any(r.get("date") == day and r.get("kind") == "daily" and r.get("sent", 0) > 0
@@ -154,13 +167,13 @@ class FeedJobs:
             return {"date": feed["date"], "kind": "daily", "sent": 0, "failed": 0, "skipped": True,
                     "message": f"the {feed['date']} feed was already sent (use force to send again)"}
         if test:
-            recipients = [(normalise_email(e), "", f"{self.public_url}/feed/unsubscribe?token=test") for e in to]
+            recipients = [(normalise_email(e), "", self.link("unsubscribe", "test")) for e in to]
         else:
             recipients = [(s.email, s.name, self.link("unsubscribe", s.token)) for s in self.store.active()]
         messages = []
         for email, name, unsub in recipients:
             m = render(feed, unsubscribe_url=unsub, images="cid", recipient_name=name,
-                       signup_url=f"{self.public_url}/feed/signup")
+                       signup_url=self.signup_url)
             subject = ("[TEST] " if test else "") + m.subject
             messages.append(build_message(self.mail, email, subject, m.html, m.text, m.images, unsubscribe_url=unsub))
         results = Mailer(self.mail).send(messages) if messages else []

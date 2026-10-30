@@ -169,10 +169,12 @@ class SubscriberStore:
     def confirm(self, token: str) -> Optional[Subscriber]:
         with self._lock, self._db() as db:
             s = self._row(db.execute("SELECT * FROM subscribers WHERE token = ?", (token,)).fetchone())
-            if not s or s.status == "unsubscribed":
+            if not s:
                 return s
-            if s.status != "active":
-                db.execute("UPDATE subscribers SET status = 'active', confirmed_at = ? WHERE token = ?", (_now(), token))
+            if not s.confirmed_at:  # the address is verified even if the daily email is (or was) switched off
+                db.execute("UPDATE subscribers SET confirmed_at = ? WHERE token = ?", (_now(), token))
+            if s.status == "pending":
+                db.execute("UPDATE subscribers SET status = 'active' WHERE token = ?", (token,))
             return self._row(db.execute("SELECT * FROM subscribers WHERE token = ?", (token,)).fetchone())
 
     def unsubscribe(self, token: str) -> Optional[Subscriber]:
@@ -196,7 +198,7 @@ class SubscriberStore:
 
     # accounts (website log-in) -------------------------------------------------
     def create_account(self, email: str, name: str, password: str, consent: bool,
-                       source: str = "website") -> Subscriber:
+                       source: str = "website", daily: bool = True) -> Subscriber:
         """Sign up with a password. The daily email starts once the address is verified by email.
         A reader who subscribed earlier without a password can set one here; an existing account cannot."""
         check_password(password)
@@ -207,6 +209,9 @@ class SubscriberStore:
         with self._lock, self._db() as db:
             db.execute("UPDATE subscribers SET password_hash = ?, name = COALESCE(NULLIF(?, ''), name) WHERE email = ?",
                        (hash_password(password), (name or "").strip()[:80], sub.email))
+            if not daily and sub.status != "active":  # app access only: verifying the address will not start emails
+                db.execute("UPDATE subscribers SET status = 'unsubscribed', unsubscribed_at = ? WHERE email = ?",
+                           (_now(), sub.email))
         return self.get(sub.email)
 
     def authenticate(self, email: str, password: str) -> Optional[Subscriber]:

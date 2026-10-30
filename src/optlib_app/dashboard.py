@@ -11,7 +11,8 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
-from optlib_app import charts, ui
+from optlib_app import charts, dash_auth, ui
+from optlib_app.config import get_setting
 from optlib_app.client import PricingAPIError, PricingClient
 
 st.set_page_config(page_title="Option Pricing Agent", page_icon="◆", layout="wide")
@@ -53,27 +54,35 @@ def validation_table(report: dict):
                               subset=["status"]), hide_index=True, use_container_width=True)
 
 
-# ------------------------------------------------------------------ sidebar
+# ------------------------------------------------------------------ log-in and sidebar
+client = api(PricingClient().base_url)  # fixed on the server: readers cannot point the app elsewhere
+try:
+    h = client.health()
+except Exception as exc:  # noqa: BLE001
+    st.error(f"The pricing service is not running. Start it with `python -m uvicorn optlib_app.api:app`.\n\n{exc}")
+    st.stop()
+USER = dash_auth.gate(client)
+IS_ADMIN = bool(USER.get("admin"))
+AGENT_FOR_ALL = get_setting("AGENT_FOR_ALL", "off").lower() in ("on", "true", "1", "yes")
+
 with st.sidebar:
     st.markdown('<div class="opa-brand">◆ Option Pricing <span>Agent</span></div>'
                 '<div class="opa-muted">NSE index options · pricing, risk, strategies</div>', unsafe_allow_html=True)
     st.write("")
+    st.markdown(f"**{USER.get('name') or USER['email']}**" + (" · admin" if IS_ADMIN else ""))
+    if st.button("Log out", use_container_width=True):
+        dash_auth.logout(client)
+        st.rerun()
     ui.theme_switch(st)
-    url = st.text_input("API URL", value=PricingClient().base_url)
-    client = api(url)
-    try:
-        h = client.health()
-        st.success(f"API connected · {h['data_mode']} data")
-        underlyings = h["underlyings"]
-        llm = h.get("llm") or {}
+    st.success(f"Live service · {h['data_mode']} data")
+    underlyings = h["underlyings"]
+    llm = h.get("llm") or {}
+    if IS_ADMIN:
         st.caption(f"Agent LLM: {llm['provider']} · {llm['model']}" if llm.get("configured")
                    else "Agent LLM: not configured")
-    except Exception as exc:  # noqa: BLE001
-        st.error(f"API not reachable at {url}. Start it with `python -m uvicorn optlib_app.api:app`.\n\n{exc}")
-        st.stop()
     underlying = st.selectbox("Underlying", underlyings, index=0)
     st.divider()
-    st.caption("Analytics for the internal desk. Not investment advice.")
+    st.caption("Market analytics for education and research. Not investment advice.")
 
 try:
     ov = client.overview(underlying)
@@ -93,9 +102,10 @@ ui.hero(f"{underlying} options desk", f"{ov['spot']:,.2f}",
          f"{len(expiry_rows)} expiries fitted", f"Curve {ov['curve']['label'].replace('MIBOR-OIS ', '')} · "
          f"{ov['curve']['age_days']} days old"])
 
-tab_market, tab_price, tab_book, tab_risk, tab_strat, tab_agent, tab_feed = st.tabs(
+dash_auth._flash(toast=True)  # messages from email links and account changes, as pop-ups
+tab_market, tab_price, tab_book, tab_risk, tab_strat, tab_agent, tab_feed, tab_acct = st.tabs(
     ["Market & smile", "Pricer", "Book risk", "Risk (VaR, stress, P&L)", "Strategy lab", "Ask the agent",
-     "Daily feed"])
+     "Daily email", "My account"])
 
 # ------------------------------------------------------------------ market
 with tab_market:
@@ -564,39 +574,42 @@ with tab_strat:
 
 # ------------------------------------------------------------------ agent
 with tab_agent:
-    st.caption("Ask in plain language, e.g. *Price 2 lots of the 22,500 call and explain the Greeks*. "
-               "Every number comes from the pricing tools; an independent validator reviews each answer.")
-    if not (h.get("llm") or {}).get("configured"):
-        st.info("The agent needs an LLM. In the repo's `.env` set `LLM_PROVIDER` (e.g. groq, gemini, openrouter, "
-                "ollama, anthropic), `LLM_API_KEY` and `LLM_MODEL`, restart the API, then check it with "
-                "`python scripts/check_llm.py`.\n\n" + (h.get("llm") or {}).get("message", ""))
-    st.session_state.setdefault("chat", [])
-    for m in st.session_state.chat:
-        with st.chat_message(m["role"]):
-            st.markdown(m["content"])
-    question = st.chat_input("Ask about a price, Greeks, the smile or the book")
-    if question:
-        st.session_state.chat.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
-        with st.chat_message("assistant"):
-            with st.spinner("Pricing and validating..."):
-                try:
-                    history = st.session_state.chat[:-1]
-                    reply = client.ask(question, history)
-                    st.markdown(reply["answer"])
-                    st.markdown(f"Status {badge(reply['status'])} · validator: {reply['validator_verdict']} · "
-                                f"{reply.get('provider', '')} {reply.get('model', '')}")
-                    if reply.get("ungrounded_numbers"):
-                        st.warning("Numbers not found in any tool result (treat with care): "
-                                   + ", ".join(reply["ungrounded_numbers"]))
-                    with st.expander("Independent validator review"):
-                        st.write(reply["validator_review"])
-                    with st.expander(f"Tool calls ({len(reply['tool_calls'])})"):
-                        st.json(reply["tool_calls"], expanded=False)
-                    st.session_state.chat.append({"role": "assistant", "content": reply["answer"]})
-                except PricingAPIError as exc:
-                    show_error(exc)
+    if not (IS_ADMIN or AGENT_FOR_ALL):  # the agent runs on the owner's LLM key
+        st.info("The AI agent is available to administrators for now.")
+    else:
+        st.caption("Ask in plain language, e.g. *Price 2 lots of the 22,500 call and explain the Greeks*. "
+                   "Every number comes from the pricing tools; an independent validator reviews each answer.")
+        if not (h.get("llm") or {}).get("configured"):
+            st.info("The agent needs an LLM. In the repo's `.env` set `LLM_PROVIDER` (e.g. groq, gemini, openrouter, "
+                    "ollama, anthropic), `LLM_API_KEY` and `LLM_MODEL`, restart the API, then check it with "
+                    "`python scripts/check_llm.py`.\n\n" + (h.get("llm") or {}).get("message", ""))
+        st.session_state.setdefault("chat", [])
+        for m in st.session_state.chat:
+            with st.chat_message(m["role"]):
+                st.markdown(m["content"])
+        question = st.chat_input("Ask about a price, Greeks, the smile or the book")
+        if question:
+            st.session_state.chat.append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
+            with st.chat_message("assistant"):
+                with st.spinner("Pricing and validating..."):
+                    try:
+                        history = st.session_state.chat[:-1]
+                        reply = client.ask(question, history)
+                        st.markdown(reply["answer"])
+                        st.markdown(f"Status {badge(reply['status'])} · validator: {reply['validator_verdict']} · "
+                                    f"{reply.get('provider', '')} {reply.get('model', '')}")
+                        if reply.get("ungrounded_numbers"):
+                            st.warning("Numbers not found in any tool result (treat with care): "
+                                       + ", ".join(reply["ungrounded_numbers"]))
+                        with st.expander("Independent validator review"):
+                            st.write(reply["validator_review"])
+                        with st.expander(f"Tool calls ({len(reply['tool_calls'])})"):
+                            st.json(reply["tool_calls"], expanded=False)
+                        st.session_state.chat.append({"role": "assistant", "content": reply["answer"]})
+                    except PricingAPIError as exc:
+                        show_error(exc)
 
 # ------------------------------------------------------------------ daily feed (email)
 with tab_feed:
@@ -608,23 +621,16 @@ with tab_feed:
                 "market-implied odds, reference prices with Greeks, open interest, futures basis and rates, and the "
                 "data-quality checks behind them. Market information only, no trade ideas.")
         st.write("")
-        with st.form("subscribe", clear_on_submit=False):
-            st.markdown("**Subscribe**")
-            s_name = st.text_input("Name", max_chars=80, placeholder="Your name")
-            s_email = st.text_input("Email", max_chars=254, placeholder="name@company.com")
-            s_consent = st.checkbox("I want to receive the daily options market feed by email. I understand it is "
-                                    "market information, not investment advice, and I can unsubscribe at any time.")
-            go_sub = st.form_submit_button("Subscribe", type="primary", use_container_width=True)
-        if go_sub:
+        on_now = bool(USER.get("daily"))
+        on = st.toggle("Send me the daily email", value=on_now, disabled=not USER.get("verified"),
+                       help=None if USER.get("verified") else "Verify your email first (see My account)")
+        if on != on_now:
             try:
-                r = client.feed_subscribe(s_email, s_name, s_consent)
-                (st.success if r["status"] in ("pending", "active") else st.error)(r["message"])
+                st.session_state["user"] = client.auth("POST", "daily", st.session_state["session"], on=on)
+                st.rerun()
             except PricingAPIError as exc:
                 show_error(exc)
-        st.caption("Double opt-in: the subscription starts only after the reader clicks the link in the "
-                   "confirmation email. Every feed email has a one-click unsubscribe link.")
-        st.markdown(f"Readers without dashboard access sign up at **[{url}/feed/signup]({url}/feed/signup)** "
-                    "(share the address set in `FEED_PUBLIC_URL` once the API is reachable on your network).")
+        st.caption(f"Sent to {USER['email']} after each trading day. Every email has a one-click unsubscribe link.")
 
     with right:
         st.markdown("**Preview of today's email**")
@@ -645,38 +651,43 @@ with tab_feed:
         else:
             st.info("Press **Build preview** to render today's email with live numbers.")
 
-    with st.expander("Admin: subscribers and sending"):
-        key = st.text_input("Admin key", type="password", help="Needed only if FEED_ADMIN_KEY is set in .env")
-        try:
-            fs = client.feed_status(key)
-            a1, a2, a3, a4 = st.columns(4)
-            a1.metric("Active", fs["counts"]["active"])
-            a2.metric("Awaiting confirmation", fs["counts"]["pending"])
-            a3.metric("Unsubscribed", fs["counts"]["unsubscribed"])
-            ls = fs.get("last_send") or {}
-            a4.metric("Last send", ls.get("date", "never"),
-                      f"{ls.get('sent', 0)} sent, {ls.get('failed', 0)} failed" if ls else None, delta_color="off", delta_arrow="off")
-            st.caption(f"Mail: {fs['mail']} · links point to {fs['public_url']}")
-            subs = client.feed_subscribers(key)["subscribers"]
-            if subs:
-                st.dataframe(pd.DataFrame(subs)[["email", "name", "status", "created_at", "confirmed_at",
-                                                 "unsubscribed_at", "source"]], hide_index=True,
-                             use_container_width=True)
-            t1, t2 = st.columns([3, 1])
-            test_to = t1.text_input("Send a test copy to", placeholder="you@company.com")
-            if t2.button("Send test", use_container_width=True) and test_to:
-                st.info(client.feed_send([test_to], admin_key=key)["message"])
-            b1, b2 = st.columns([3, 1])
-            sure = b1.checkbox(f"Send today's feed to all {fs['counts']['active']} active subscribers now")
-            if b2.button("Send to all", type="primary", disabled=not sure, use_container_width=True):
-                st.info(client.feed_send(admin_key=key)["message"])
-            d1, d2 = st.columns([3, 1])
-            del_email = d1.text_input("Erase a subscriber (removes all their data)", placeholder="email")
-            if d2.button("Erase", use_container_width=True) and del_email:
-                st.info("Erased." if client.feed_delete(del_email, key)["deleted"] else "No such subscriber.")
-        except PricingAPIError as exc:
-            show_error(exc)
+    if IS_ADMIN:
+        with st.expander("Admin: subscribers and sending"):
+            key = st.text_input("Admin key", type="password", help="Needed only if FEED_ADMIN_KEY is set in .env")
+            try:
+                fs = client.feed_status(key)
+                a1, a2, a3, a4 = st.columns(4)
+                a1.metric("Active", fs["counts"]["active"])
+                a2.metric("Awaiting confirmation", fs["counts"]["pending"])
+                a3.metric("Unsubscribed", fs["counts"]["unsubscribed"])
+                ls = fs.get("last_send") or {}
+                a4.metric("Last send", ls.get("date", "never"),
+                          f"{ls.get('sent', 0)} sent, {ls.get('failed', 0)} failed" if ls else None, delta_color="off", delta_arrow="off")
+                st.caption(f"Mail: {fs['mail']} · links point to {fs['public_url']}")
+                subs = client.feed_subscribers(key)["subscribers"]
+                if subs:
+                    st.dataframe(pd.DataFrame(subs)[["email", "name", "status", "created_at", "confirmed_at",
+                                                     "unsubscribed_at", "source"]], hide_index=True,
+                                 use_container_width=True)
+                t1, t2 = st.columns([3, 1])
+                test_to = t1.text_input("Send a test copy to", placeholder="you@company.com")
+                if t2.button("Send test", use_container_width=True) and test_to:
+                    st.info(client.feed_send([test_to], admin_key=key)["message"])
+                b1, b2 = st.columns([3, 1])
+                sure = b1.checkbox(f"Send today's feed to all {fs['counts']['active']} active subscribers now")
+                if b2.button("Send to all", type="primary", disabled=not sure, use_container_width=True):
+                    st.info(client.feed_send(admin_key=key)["message"])
+                d1, d2 = st.columns([3, 1])
+                del_email = d1.text_input("Erase a subscriber (removes all their data)", placeholder="email")
+                if d2.button("Erase", use_container_width=True) and del_email:
+                    st.info("Erased." if client.feed_delete(del_email, key)["deleted"] else "No such subscriber.")
+            except PricingAPIError as exc:
+                show_error(exc)
 
     st.warning("**Not investment advice.** The feed is market information and analytics for education and "
                "research. It is not a recommendation to buy, sell or hold any security or derivative, and the "
                "author accepts no responsibility for any loss or gain from using it.")
+
+# ------------------------------------------------------------------ my account
+with tab_acct:
+    dash_auth.account_tab(client, USER)

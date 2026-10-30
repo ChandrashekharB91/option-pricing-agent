@@ -5,6 +5,10 @@ address = "127.0.0.1"
 port = 8501
 headless = false
 
+[client]
+# readers of a shared link see no "Deploy" button or developer menu
+toolbarMode = "viewer"
+
 [browser]
 serverAddress = "localhost"
 gatherUsageStats = false

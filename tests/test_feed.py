@@ -253,3 +253,68 @@ def test_auto_sender_schedule(svc, tmp_path):
     assert on.due(datetime(2026, 10, 30, 15, 25, tzinfo=ist))  # Friday, in the window
     assert not on.due(datetime(2026, 10, 31, 15, 25, tzinfo=ist))  # Saturday
     assert not on.due(datetime(2026, 10, 30, 17, 5, tzinfo=ist))  # too late
+
+
+def test_dashboard_accounts_api(svc, tmp_path):
+    """The /auth endpoints the shared dashboard uses, with email links pointing at the app (FEED_LINKS=app)."""
+    from fastapi.testclient import TestClient
+
+    from optlib_app import api, auth_api
+
+    jobs = FeedJobs(svc, feed_dir=tmp_path, get=_settings({"FEED_PUBLIC_URL": "https://x.trycloudflare.com",
+                                                          "FEED_LINKS": "app", "ADMIN_EMAILS": "boss@x.com"}))
+    api.app.dependency_overrides[api.get_service] = lambda: svc
+    api.app.dependency_overrides[api.get_feed] = lambda: jobs
+    auth_api._failures.clear()
+    try:
+        c = TestClient(api.app)
+        assert c.post("/auth/signup", json={"email": "u@x.com", "password": "secret123", "accept": False}).status_code == 400
+        assert c.post("/auth/signup", json={"email": "u@x.com", "password": "short", "accept": True}).status_code == 400
+        r = c.post("/auth/signup", json={"email": "u@x.com", "name": "U", "password": "secret123", "accept": True,
+                                         "daily": False}).json()
+        tok = r["token"]
+        me = c.get("/auth/me", headers={"X-Session": tok}).json()
+        assert me["email"] == "u@x.com" and not me["verified"] and not me["daily"] and not me["admin"]
+        assert not me["verification_required"]  # outbox mode: nobody could verify, so the app stays usable
+        assert "password_hash" not in me and "token" not in me
+        assert c.get("/auth/me", headers={"X-Session": "nope"}).status_code == 401
+        # the verification email links to the app, not to the API
+        mail = email.message_from_bytes(sorted((tmp_path / "outbox").glob("*.eml"))[-1].read_bytes())
+        text = next(p for p in mail.walk() if p.get_content_type() == "text/plain").get_payload(decode=True).decode()
+        vtok = re.search(r"https://x\.trycloudflare\.com/\?verify=([\w-]+)", text).group(1)
+        assert c.post("/auth/daily", json={"on": True}, headers={"X-Session": tok}).status_code == 400  # unverified
+        v = c.post("/auth/verify", json={"token": vtok}).json()
+        assert v["user"]["verified"] and not v["user"]["daily"]  # opted out of the email at sign-up
+        assert c.post("/auth/daily", json={"on": True}, headers={"X-Session": tok}).json()["daily"]
+        # log-in, brute-force brake, log-out
+        assert c.post("/auth/login", json={"email": "U@X.com", "password": "bad12345"}).status_code == 401
+        tok2 = c.post("/auth/login", json={"email": "U@X.com", "password": "secret123"}).json()["token"]
+        c.post("/auth/logout", headers={"X-Session": tok2})
+        assert c.get("/auth/me", headers={"X-Session": tok2}).status_code == 401
+        for _ in range(5):
+            c.post("/auth/login", json={"email": "u@x.com", "password": "wrong999"})
+        assert c.post("/auth/login", json={"email": "u@x.com", "password": "secret123"}).status_code == 429
+        auth_api._failures.clear()
+        # reset by email; the link opens the app
+        c.post("/auth/forgot", json={"email": "u@x.com"})
+        assert jobs.link("reset", "abc") == "https://x.trycloudflare.com/?reset=abc"
+        rt = jobs.store.get("u@x.com").reset_token
+        assert c.post("/auth/reset", json={"token": rt, "password": "newpass12"}).json()["message"] == "Password saved."
+        tok3 = c.post("/auth/login", json={"email": "u@x.com", "password": "newpass12"}).json()["token"]
+        # unsubscribe from an email link, change password, delete
+        utok = jobs.store.get("u@x.com").token
+        assert "will not receive" in c.post("/auth/unsubscribe", json={"token": utok}).json()["message"]
+        assert c.post("/auth/password", json={"current": "x", "new": "another12"},
+                      headers={"X-Session": tok3}).status_code == 400
+        tok4 = c.post("/auth/password", json={"current": "newpass12", "new": "another12"},
+                      headers={"X-Session": tok3}).json()["token"]
+        assert c.get("/auth/me", headers={"X-Session": tok3}).status_code == 401  # old sessions end
+        assert c.delete("/auth/account", headers={"X-Session": tok4}).json()["deleted"]
+        assert jobs.store.get("u@x.com") is None
+        # admins come from ADMIN_EMAILS; admin API calls through a tunnel need the admin key
+        c.post("/auth/signup", json={"email": "boss@x.com", "password": "secret123", "accept": True})
+        bt = c.post("/auth/login", json={"email": "boss@x.com", "password": "secret123"}).json()
+        assert bt["user"]["admin"]
+        assert c.get("/feed/subscribers", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 403
+    finally:
+        api.app.dependency_overrides.clear()
