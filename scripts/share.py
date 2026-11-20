@@ -117,6 +117,23 @@ def start_tunnel(binary: str, protocol: str = "auto") -> tuple[subprocess.Popen,
     return proc, found[0]
 
 
+def email_status() -> list[str]:
+    """Plain warning when the daily email cannot go out, so it is not discovered days later."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from optlib_app.config import get_setting
+
+    smtp = bool(get_setting("SMTP_HOST", ""))
+    live = get_setting("DATA_MODE", "replay").lower() == "live"
+    auto = get_setting("FEED_AUTO_SEND", "auto").lower()
+    if not smtp:
+        return ["EMAIL IS OFF: no SMTP_HOST in .env, so verification, password-reset and daily emails are only",
+                "saved in data\\feed\\outbox. Add the Gmail settings to .env and restart (README, Daily email feed)."]
+    if auto == "off" or (auto == "auto" and not live):
+        return ["Email is set up, but the automatic daily send is off (needs DATA_MODE=live in .env)."]
+    send_at = get_setting("FEED_SEND_TIME", "15:20")
+    return [f"Daily email: sent automatically on weekdays from {send_at} IST while this window is open."]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--local", action="store_true", help="no tunnel: this computer only")
@@ -161,6 +178,8 @@ def main() -> int:
     print("  Keep this window open; Ctrl+C stops the app and the link.")
     if not a.local:
         print("  The link changes each time you start this.")
+    for line in email_status():
+        print("  " + line)
     print(bar + "\n")
     if not a.no_browser:
         webbrowser.open(public)
