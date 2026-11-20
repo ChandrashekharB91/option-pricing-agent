@@ -22,8 +22,27 @@ def read_env_file(path: Path) -> dict[str, str]:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
             value = value[1:-1]
-        values[key.strip()] = value
+        key = key.strip()
+        if value or key not in values:  # an empty duplicate (e.g. a pasted template line) never wipes a real value
+            values[key] = value
     return values
+
+
+def env_key_lines(path: Path, names: Iterable[str]) -> dict[str, list[tuple[int, bool]]]:
+    """Where each key appears in a .env file: [(line number, has a value)]. Values themselves are never returned."""
+    found: dict[str, list[tuple[int, bool]]] = {n: [] for n in names}
+    if not path.is_file():
+        return found
+    for i, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
+        line = raw.strip()
+        if line.startswith("export "):
+            line = line[len("export "):]
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip() in found:
+            found[key.strip()].append((i, bool(value.strip())))
+    return found
 
 
 def get_secret(name: str, search_dirs: Optional[Iterable[Path]] = None) -> str:

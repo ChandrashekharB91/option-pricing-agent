@@ -46,6 +46,29 @@ def open_signup(base: str) -> int:
     return 0
 
 
+def explain_outbox() -> None:
+    """Say why email is off, by .env line number, without showing any value."""
+    from optlib.data.env import env_key_lines
+
+    env = ROOT / ".env"
+    keys = ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "MAIL_FROM")
+    if not env.is_file():
+        print(f"  Email is off: there is no .env file at {env}")
+        return
+    lines = env_key_lines(env, keys)
+    print(f"  Email is off. In {env}:")
+    for k in keys:
+        where = lines[k]
+        if not where:
+            print(f"    {k:<14} missing")
+        else:
+            print(f"    {k:<14} " + ", ".join(f"line {n} {'(set)' if ok else '(EMPTY)'}" for n, ok in where))
+    others = [p.name for p in ROOT.glob(".env*") if p.name not in (".env", ".env.example")]
+    if others:
+        print(f"    Other files that look like .env: {', '.join(others)} (only '.env' is read; Notepad can save "
+              f"'.env.txt' by mistake)")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group()
@@ -72,6 +95,8 @@ def main() -> int:
         return open_signup(jobs.public_url)
     print(f"Data: {svc.mode} · mail: {jobs.mail.describe()}")
     print(f"Subscriber list: {jobs.store.path.resolve()}")
+    if jobs.mail.mode == "outbox":
+        explain_outbox()
 
     if a.subscribers:
         subs = jobs.store.all()
