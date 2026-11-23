@@ -10,8 +10,8 @@ import html
 import json
 
 import streamlit as st
-import streamlit.components.v1 as components
 
+from . import ui
 from .client import PricingAPIError
 
 COOKIE = "opa_app_session"
@@ -27,9 +27,9 @@ def _set_cookie(token: str, max_age: int = 14 * 86400) -> None:
 
 
 def _cookie_script(value: str, max_age: int) -> None:
-    components.html("<script>const d = window.parent.document; const secure = window.parent.location.protocol === "
+    ui.embed("<script>const d = window.parent.document; const secure = window.parent.location.protocol === "
                     "'https:' ? '; Secure' : ''; d.cookie = '" + COOKIE + "=' + encodeURIComponent(" + value + ") + "
-                    f"'; path=/; max-age={max_age}; SameSite=Lax' + secure;</script>", height=0)
+                    f"'; path=/; max-age={max_age}; SameSite=Lax' + secure;</script>")
 
 
 def _start(token: str, user: dict, message: str = "") -> None:
@@ -104,7 +104,7 @@ def _reset_screen(client, token: str) -> None:
     with mid, st.form("reset"):
         p1 = st.text_input("New password", type="password")
         p2 = st.text_input("Repeat it", type="password")
-        if st.form_submit_button("Save password", type="primary", use_container_width=True):
+        if st.form_submit_button("Save password", type="primary", width="stretch"):
             if p1 != p2:
                 st.error("The two passwords do not match.")
             else:
@@ -124,11 +124,11 @@ def _login_screen(client) -> None:
     _, mid, _ = st.columns([1, 1.4, 1])
     with mid:
         _flash()
-        t_in, t_up, t_fp = st.tabs(["Log in", "Create account", "Forgot password"])
+        t_in, t_up, t_sub, t_fp = st.tabs(["Log in", "Create account", "Daily email only", "Forgot password"])
         with t_in, st.form("login"):
             email = st.text_input("Email", key="li_email")
             pw = st.text_input("Password", type="password", key="li_pw")
-            if st.form_submit_button("Log in", type="primary", use_container_width=True):
+            if st.form_submit_button("Log in", type="primary", width="stretch"):
                 try:
                     r = client.auth("POST", "login", email=email, password=pw)
                     _start(r["token"], r["user"])
@@ -142,7 +142,7 @@ def _login_screen(client) -> None:
             p2 = st.text_input("Repeat password", type="password")
             daily = st.checkbox("Also send me the daily NIFTY options email", value=True)
             accept = st.checkbox(TERMS)
-            if st.form_submit_button("Create account", type="primary", use_container_width=True):
+            if st.form_submit_button("Create account", type="primary", width="stretch"):
                 if p1 != p2:
                     st.error("The two passwords do not match.")
                 else:
@@ -153,9 +153,21 @@ def _login_screen(client) -> None:
                         st.rerun()
                     except PricingAPIError as exc:
                         st.error(exc.detail)
+        with t_sub, st.form("subscribe_only"):
+            st.caption("Just the daily NIFTY options email, no account needed. We send a confirmation link first.")
+            s_name = st.text_input("Name", max_chars=80, key="so_name")
+            s_email = st.text_input("Email", max_chars=254, key="so_email")
+            s_ok = st.checkbox("I want to receive the daily options market email. I understand it is market "
+                               "information, not investment advice, and I can unsubscribe at any time.")
+            if st.form_submit_button("Subscribe", type="primary", width="stretch"):
+                try:
+                    r = client.feed_subscribe(s_email, s_name, s_ok)
+                    (st.success if r["status"] in ("pending", "active") else st.error)(r["message"])
+                except PricingAPIError as exc:
+                    st.error(exc.detail)
         with t_fp, st.form("forgot"):
             email = st.text_input("Email", key="fp_email")
-            if st.form_submit_button("Email me a reset link", use_container_width=True):
+            if st.form_submit_button("Email me a reset link", width="stretch"):
                 try:
                     st.success(client.auth("POST", "forgot", email=email)["message"])
                 except PricingAPIError as exc:
@@ -170,12 +182,12 @@ def _verify_screen(client, user: dict) -> None:
     with mid:
         _flash()
         c1, c2 = st.columns(2)
-        if c1.button("Resend the link", use_container_width=True):
+        if c1.button("Resend the link", width="stretch"):
             try:
                 st.success(client.auth("POST", "resend", st.session_state["session"])["message"])
             except PricingAPIError as exc:
                 st.error(exc.detail)
-        if c2.button("Log out", use_container_width=True):
+        if c2.button("Log out", width="stretch"):
             logout(client)
             st.rerun()
     st.stop()

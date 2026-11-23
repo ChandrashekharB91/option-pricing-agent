@@ -23,6 +23,15 @@ PALETTES = {
 STATUS = {"PASS": "#16a34a", "WARN": "#d97706", "FAIL": "#dc2626", "SKIP": "#6b7280"}
 
 
+def embed(html_doc: str, height: int = 0) -> None:
+    """Our own HTML/JS in a same-origin iframe (st.iframe on current Streamlit; components.html before it).
+    Only ever pass HTML this app generated, never user input."""
+    if hasattr(st, "iframe"):
+        st.iframe(html_doc, height=max(int(height), 1))
+    else:
+        components.html(html_doc, height=height, scrolling=height > 0)
+
+
 def current_theme() -> str:
     try:
         return "dark" if (st.context.theme.type or "light") == "dark" else "light"
@@ -36,8 +45,8 @@ def theme_switch(where=st.sidebar) -> bool:
     dark = where.toggle("Dark mode", value=dark_now, help="Switches every chart and table; the page reloads.")
     if dark != dark_now:
         choice = json.dumps(json.dumps("Dark" if dark else "Light"))
-        components.html("<script>const p = window.parent; p.localStorage.setItem('stActiveTheme-' + "
-                        f"p.location.pathname + '-v2', {choice}); p.location.reload();</script>", height=0)
+        embed("<script>const p = window.parent; p.localStorage.setItem('stActiveTheme-' + "
+                        f"p.location.pathname + '-v2', {choice}); p.location.reload();</script>")
     return dark_now
 
 

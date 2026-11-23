@@ -9,7 +9,6 @@ from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-import streamlit.components.v1 as components
 
 from optlib_app import charts, dash_auth, ui
 from optlib_app.config import get_setting
@@ -37,7 +36,7 @@ def api(url: str) -> PricingClient:
 
 def show(fig: go.Figure, where=st) -> None:
     """Every chart goes through here so it follows the light/dark theme."""
-    where.plotly_chart(charts.themed(fig, DARK), use_container_width=True, theme=None)
+    where.plotly_chart(charts.themed(fig, DARK), width="stretch", theme=None)
 
 
 def badge(status: str) -> str:
@@ -51,7 +50,7 @@ def show_error(exc: Exception):
 def validation_table(report: dict):
     df = pd.DataFrame(report["checks"])[["status", "name", "detail"]]
     st.dataframe(df.style.map(lambda s: f"color: {STATUS_COLOR.get(s, 'inherit')}; font-weight: 600",
-                              subset=["status"]), hide_index=True, use_container_width=True)
+                              subset=["status"]), hide_index=True, width="stretch")
 
 
 # ------------------------------------------------------------------ log-in and sidebar
@@ -70,7 +69,7 @@ with st.sidebar:
                 '<div class="opa-muted">NSE index options · pricing, risk, strategies</div>', unsafe_allow_html=True)
     st.write("")
     st.markdown(f"**{USER.get('name') or USER['email']}**" + (" · admin" if IS_ADMIN else ""))
-    if st.button("Log out", use_container_width=True):
+    if st.button("Log out", width="stretch"):
         dash_auth.logout(client)
         st.rerun()
     ui.theme_switch(st)
@@ -128,7 +127,7 @@ with tab_market:
     st.dataframe(table.style.format({"days": "{:.2f}", "forward": "{:,.2f}", "rate": "{:.3%}", "ATM vol": "{:.2%}",
                                      "SVI RMSE (vol pts)": "{:.3f}", "SVI ATM gap": "{:+.3f}"})
                  .map(lambda s: f"color: {STATUS_COLOR.get(s, 'inherit')}; font-weight: 600", subset=["QA", "SVI"]),
-                 hide_index=True, use_container_width=True)
+                 hide_index=True, width="stretch")
 
     c1, c2 = st.columns([1, 2])
     exp = c1.selectbox("Expiry", expiry_ids, key="smile_exp")
@@ -189,7 +188,7 @@ with tab_price:
             g.index.name = "Greek"
             left, right = st.columns([1, 2])
             left.dataframe(g.style.format(lambda x: f"{x:,.2f}" if abs(x) >= 1 else f"{x:.6f}"),
-                           use_container_width=True)
+                           width="stretch")
             left.caption("vega per vol point · theta per calendar day · rho per bp · position = per unit × quantity")
             with right:
                 validation_table(v)
@@ -200,7 +199,7 @@ with tab_price:
 with tab_book:
     st.caption("Edit the book (lots: positive long, negative short), then run. Default: short 22,500 straddle "
                "with a 22,000 put hedge.")
-    book = st.data_editor(DEFAULT_BOOK.assign(expiry=expiry_ids[0]), num_rows="dynamic", use_container_width=True,
+    book = st.data_editor(DEFAULT_BOOK.assign(expiry=expiry_ids[0]), num_rows="dynamic", width="stretch",
                           column_config={"option_type": st.column_config.SelectboxColumn(options=["call", "put"]),
                                          "expiry": st.column_config.SelectboxColumn(options=expiry_ids)})
     if st.button("Run book risk", type="primary"):
@@ -219,7 +218,7 @@ with tab_book:
                 {"lots": "{:g}", "quantity": "{:,.0f}", "price": "{:,.2f}", "vol": "{:.2%}", "value": "{:,.0f}",
                  "delta": "{:,.2f}", "gamma": "{:.4f}",
                  "vega": "{:,.0f}", "theta": "{:,.0f}", "rho": "{:,.2f}", "strike": "{:,.0f}"}),
-                hide_index=True, use_container_width=True)
+                hide_index=True, width="stretch")
             sc = client.scenarios(positions)
             z = pd.DataFrame(sc["pnl"], index=[f"{v * 100:+.0f} vol" for v in sc["vol_shocks"]],
                              columns=[f"{s * 100:+.0f}%" for s in sc["spot_shocks"]])
@@ -270,7 +269,7 @@ with tab_risk:
             st.caption("Limits are placeholders in config/risk_limits.json; the risk team sets them.")
             st.dataframe(pd.DataFrame(r["by_expiry"]).style.format(
                 {"value": "{:,.0f}", "delta": "{:,.1f}", "gamma": "{:.4f}", "vega": "{:,.0f}", "theta": "{:,.0f}"}),
-                hide_index=True, use_container_width=True)
+                hide_index=True, width="stretch")
         with sub[1]:
             left, right = st.columns([3, 2])
             show(charts.var_histogram(v), left)
@@ -291,7 +290,7 @@ with tab_risk:
             st.dataframe(pd.DataFrame([{k: x[k] for k in ("scenario", "kind", "index_move", "vol_mult", "pnl")}
                                        for x in r["stress"]]).style.format(
                 {"index_move": "{:+.2%}", "vol_mult": "x{:.2f}", "pnl": "{:,.0f}"}), hide_index=True,
-                use_container_width=True)
+                width="stretch")
         with sub[4]:
             days = client.eod_days()
             if days:
@@ -310,7 +309,7 @@ with tab_risk:
                                                           "gamma", "vega", "theta", "cross", "unexplained"]].style.format(
                         {"close0": "{:,.2f}", "close1": "{:,.2f}", "vol0": "{:.2%}", "vol1": "{:.2%}",
                          **{k: "{:,.0f}" for k in ("actual", "delta", "gamma", "vega", "theta", "cross",
-                                                   "unexplained")}}), hide_index=True, use_container_width=True)
+                                                   "unexplained")}}), hide_index=True, width="stretch")
                     for n in e["notes"]:
                         st.caption(n)
                 except PricingAPIError as exc:
@@ -390,7 +389,7 @@ def show_strategy(p: dict, source: str, view_summary: dict | None):
                           "vol": l["vol"]} for l in p["legs"]])
     left.dataframe(legs.style.format({"bid": "{:,.2f}", "ask": "{:,.2f}", "fill price": "{:,.2f}",
                                       "vol": lambda x: "" if x is None or x != x else f"{x:.2%}"}),
-                   hide_index=True, use_container_width=True)
+                   hide_index=True, width="stretch")
     m = p["margin"]
     costs = pd.DataFrame([
         {"item": "Premium paid (+) / received (-)", "Rs": p["premium"]},
@@ -398,7 +397,7 @@ def show_strategy(p: dict, source: str, view_summary: dict | None):
         {"item": "Charges (brokerage, STT, fees, GST)", "Rs": p["entry_charges"]},
         {"item": "Margin estimate (SPAN-style + exposure)", "Rs": m["total"]},
         {"item": "Capital needed", "Rs": p["capital_required"]}])
-    right.dataframe(costs.style.format({"Rs": "{:,.0f}"}), hide_index=True, use_container_width=True)
+    right.dataframe(costs.style.format({"Rs": "{:,.0f}"}), hide_index=True, width="stretch")
     g = p["greeks"]
     st.caption(f"Position Greeks: delta {g['delta']:,.1f} units · gamma {g['gamma']:,.3f} · "
                f"vega ₹{g['vega']:,.0f} per vol pt · theta ₹{g['theta']:,.0f} per day. "
@@ -465,12 +464,12 @@ with tab_strat:
             if rec["ideas"]:
                 st.markdown("#### Recommended")
                 st.dataframe(idea_rows(rec["ideas"], src).style.format(IDEA_FORMAT), hide_index=True,
-                             use_container_width=True, column_config=IDEA_COLUMNS)
+                             width="stretch", column_config=IDEA_COLUMNS)
             if rec["near_misses"]:
                 with st.expander(f"Not recommended: the {len(rec['near_misses'])} closest, and why",
                                  expanded=not rec["ideas"]):
                     st.dataframe(idea_rows(rec["near_misses"], src, with_reasons=True).style.format(IDEA_FORMAT),
-                                 hide_index=True, use_container_width=True, column_config=IDEA_COLUMNS)
+                                 hide_index=True, width="stretch", column_config=IDEA_COLUMNS)
             if any(max_profit_text(i).endswith("*") for _, i in choices):
                 st.caption("\\* profit within a 3-sd move by expiry; the larger figure needs NIFTY to fall to zero.")
             if choices:
@@ -488,7 +487,7 @@ with tab_strat:
                 with st.expander("Strategies that do not fit this capital"):
                     st.dataframe(pd.DataFrame(rec["blocked"]).rename(columns={"min_capital": "cheapest needs (₹)"})
                                  .style.format({"cheapest needs (₹)": "{:,.0f}"}), hide_index=True,
-                                 use_container_width=True)
+                                 width="stretch")
         else:
             st.info("Set the capital and view above, then press **Find strategies**.")
 
@@ -499,7 +498,7 @@ with tab_strat:
         legs_df = st.data_editor(pd.DataFrame([
             {"instrument": "call", "side": "buy", "strike": k0, "ratio": 1},
             {"instrument": "call", "side": "sell", "strike": k0 + 200, "ratio": 1}]), num_rows="dynamic",
-            use_container_width=True, key="legs", column_config={
+            width="stretch", key="legs", column_config={
                 "instrument": st.column_config.SelectboxColumn(options=["call", "put", "future"]),
                 "side": st.column_config.SelectboxColumn(options=["buy", "sell"])})
         lots_b = st.number_input("Lots", min_value=1, max_value=50, value=1)
@@ -551,7 +550,7 @@ with tab_strat:
                     for n, x in enumerate(hg["hedges"], 1)]).style.format(
                     {c: "{:,.0f}" for c in ("cash needed", "loss if up", "loss if down", "ES95 after", "vega after",
                                             "expected P&L after")} | {"delta after": "{:,.1f}"}),
-                    hide_index=True, use_container_width=True)
+                    hide_index=True, width="stretch")
                 pick = st.selectbox("Inspect hedge", range(len(hg["hedges"])),
                                     format_func=lambda i: f"{i + 1}. {hg['hedges'][i]['label']}")
                 x = hg["hedges"][pick]
@@ -560,7 +559,7 @@ with tab_strat:
                 right.markdown("**Trades to place**")
                 right.dataframe(pd.DataFrame(x["legs"]).rename(columns={"price": "fill price"}).style.format(
                     {"fill price": "{:,.2f}", "bid": "{:,.2f}", "ask": "{:,.2f}"}), hide_index=True,
-                    use_container_width=True)
+                    width="stretch")
                 mtxt = (f"margin released ₹{-x['extra_margin']:,.0f}" if x["extra_margin"] < 0
                         else f"extra margin ₹{x['extra_margin']:,.0f}")
                 right.caption(f"Premium ₹{x['premium']:,.0f} · {mtxt} · charges ₹{x['charges']:,.0f}. "
@@ -622,6 +621,9 @@ with tab_feed:
                 "data-quality checks behind them. Market information only, no trade ideas.")
         st.write("")
         on_now = bool(USER.get("daily"))
+        state = ("✅ **Subscribed.** The email goes to **{}** after each trading day (about 15:20 IST)."
+                 if on_now else "**Not subscribed.** Switch it on below to get the email at **{}**.")
+        st.markdown(state.format(USER["email"]))
         on = st.toggle("Send me the daily email", value=on_now, disabled=not USER.get("verified"),
                        help=None if USER.get("verified") else "Verify your email first (see My account)")
         if on != on_now:
@@ -630,20 +632,35 @@ with tab_feed:
                 st.rerun()
             except PricingAPIError as exc:
                 show_error(exc)
-        st.caption(f"Sent to {USER['email']} after each trading day. Every email has a one-click unsubscribe link.")
+        if not USER.get("verified"):
+            st.caption("Verify your email address first: use **Resend the verification link** in *My account*.")
+        st.caption("Every email has a one-click unsubscribe link.")
+        with st.form("subscribe_other", clear_on_submit=True):
+            st.markdown("**Send it to another address too**")
+            o_email = st.text_input("Email", max_chars=254, placeholder="e.g. your work email",
+                                    label_visibility="collapsed")
+            o_ok = st.checkbox("The owner of this address agrees to receive the daily email (it is market "
+                               "information, not investment advice).")
+            if st.form_submit_button("Subscribe this address", width="stretch"):
+                try:
+                    r = client.feed_subscribe(o_email, "", o_ok)
+                    (st.success if r["status"] in ("pending", "active") else st.error)(
+                        r["message"] + ("" if r["status"] != "pending" else " The owner of that inbox confirms it."))
+                except PricingAPIError as exc:
+                    show_error(exc)
 
     with right:
         st.markdown("**Preview of today's email**")
         pv1, pv2 = st.columns([3, 1])
         p_name = pv1.text_input("Greeting name for the preview", value="", placeholder="optional",
                                 label_visibility="collapsed")
-        if pv2.button("Build preview", use_container_width=True) or "feed_preview" in st.session_state:
+        if pv2.button("Build preview", width="stretch") or "feed_preview" in st.session_state:
             try:
                 if "feed_preview" not in st.session_state or st.session_state.get("feed_preview_name") != p_name:
                     with st.spinner("Building today's feed..."):
                         st.session_state["feed_preview"] = client.feed_preview(p_name)
                         st.session_state["feed_preview_name"] = p_name
-                components.html(st.session_state["feed_preview"], height=1100, scrolling=True)
+                ui.embed(st.session_state["feed_preview"], height=1100)
                 st.download_button("Download preview (HTML)", st.session_state["feed_preview"],
                                    file_name="nifty_options_daily_preview.html", mime="text/html")
             except PricingAPIError as exc:
@@ -668,18 +685,18 @@ with tab_feed:
                 if subs:
                     st.dataframe(pd.DataFrame(subs)[["email", "name", "status", "created_at", "confirmed_at",
                                                      "unsubscribed_at", "source"]], hide_index=True,
-                                 use_container_width=True)
+                                 width="stretch")
                 t1, t2 = st.columns([3, 1])
                 test_to = t1.text_input("Send a test copy to", placeholder="you@company.com")
-                if t2.button("Send test", use_container_width=True) and test_to:
+                if t2.button("Send test", width="stretch") and test_to:
                     st.info(client.feed_send([test_to], admin_key=key)["message"])
                 b1, b2 = st.columns([3, 1])
                 sure = b1.checkbox(f"Send today's feed to all {fs['counts']['active']} active subscribers now")
-                if b2.button("Send to all", type="primary", disabled=not sure, use_container_width=True):
+                if b2.button("Send to all", type="primary", disabled=not sure, width="stretch"):
                     st.info(client.feed_send(admin_key=key)["message"])
                 d1, d2 = st.columns([3, 1])
                 del_email = d1.text_input("Erase a subscriber (removes all their data)", placeholder="email")
-                if d2.button("Erase", use_container_width=True) and del_email:
+                if d2.button("Erase", width="stretch") and del_email:
                     st.info("Erased." if client.feed_delete(del_email, key)["deleted"] else "No such subscriber.")
             except PricingAPIError as exc:
                 show_error(exc)
