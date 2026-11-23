@@ -145,7 +145,10 @@ def _reference_options(svc, surf, smile, lot: int) -> list[dict]:
 
 
 def build_feed(svc, underlying: str = "NIFTY", max_expiries: int = 4, history_path: Optional[Path] = None) -> dict:
-    surf = svc.surface(underlying, max_expiries=max_expiries)
+    all_exps = svc.expiries(underlying)
+    today = svc.now().date()
+    expiring_today = [e for e in all_exps if e == today]
+    surf = svc.surface(underlying, max_expiries=max_expiries, skip_today=True)
     as_of = surf.as_of if isinstance(surf.as_of, datetime) else datetime.fromisoformat(str(surf.as_of))
     lot = svc.lot_size(underlying)
     hist = _history_block(svc, as_of.date())
@@ -213,6 +216,7 @@ def build_feed(svc, underlying: str = "NIFTY", max_expiries: int = 4, history_pa
     feed["vrp"] = (e0["atm_vol"] - hist["rv20"]) if hist["rv20"] else None
     feed["previous"] = previous(history_path, feed["date"]) if history_path else None
     feed["changes"] = changes(feed, feed["previous"])
+    feed["expiring_today"] = [e.isoformat() for e in expiring_today]
     feed["highlights"] = highlights(feed)
     feed["checks"] = {
         "expiries_pass": sum(e["svi_status"] == "PASS" for e in expiries), "expiries": len(expiries),
@@ -285,6 +289,9 @@ def highlights(feed: dict) -> list[str]:
     """Plain factual sentences for the top of the email. Descriptive only: no direction, no advice."""
     out = []
     e0 = feed["expiries"][0]
+    if feed.get("expiring_today"):
+        out.append(f"Expiry day: the {_d(feed['expiring_today'][0])} contract settles today and is left out; "
+                   f"figures below start from the {_d(e0['expiry'])} expiry.")
     if feed["change"] is not None:
         out.append(f"{feed['underlying']} at {feed['spot']:,.2f}, {feed['change']:+,.2f} points "
                    f"({feed['change_pct']:+.2%}) from the {_d(feed['hist_prev_date'])} close of "

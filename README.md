@@ -232,7 +232,8 @@ python scripts/daily_feed.py --send                     # all confirmed subscrib
 python scripts/daily_feed.py --subscribers
 ```
 
-**Sending for real.** Set `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM` in `.env` (examples in
+**Sending for real.** Easiest: `python scripts/setup_email.py` asks for your Gmail address and app password
+(hidden), checks the login, sends a test email and writes the settings into `.env`. Or by hand: set `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD` and `MAIL_FROM` in `.env` (examples in
 `.env.example`; for Gmail use an app password, never the account password). Set `FEED_PUBLIC_URL` to an address
 readers can reach, or the confirm/unsubscribe links will only work on this machine; until then readers can reply
 UNSUBSCRIBE and an admin removes them in the dashboard.

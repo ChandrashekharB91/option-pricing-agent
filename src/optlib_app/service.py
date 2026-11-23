@@ -145,15 +145,20 @@ class PricingService:
             return datetime.fromisoformat(self._meta["as_of"])
         return datetime.now(IST)
 
-    def surface(self, underlying: str, max_expiries: int = 4) -> VolSurface:
+    def surface(self, underlying: str, max_expiries: int = 4, skip_today: bool = False) -> VolSurface:
+        """skip_today leaves out a contract that expires today (on expiry day its last hours of time value make
+        implied vols meaningless as a headline; the daily email uses this)."""
         underlying = self._check_underlying(underlying)
-        key = (underlying, max_expiries)
+        key = (underlying, max_expiries, skip_today)
         with self._lock:
             hit = self._surfaces.get(key)
             fresh = hit and (self.mode == "replay" or time.time() - hit[0] < self.settings.surface_ttl_seconds)
             if fresh:
                 return hit[1]
-            exps = self.expiries(underlying)[:max_expiries]
+            exps = self.expiries(underlying)
+            if skip_today:
+                exps = [e for e in exps if e > self.now().date()]
+            exps = exps[:max_expiries]
             if not exps:
                 raise ServiceError(f"no data for {underlying} in {self.mode} mode")
             surf = build_surface(self.source(), self.curve(self.now().date()), underlying, expiries=exps)

@@ -318,3 +318,20 @@ def test_dashboard_accounts_api(svc, tmp_path):
         assert c.get("/feed/subscribers", headers={"cf-connecting-ip": "1.2.3.4"}).status_code == 403
     finally:
         api.app.dependency_overrides.clear()
+
+
+def test_expiry_day_leaves_out_todays_contract(monkeypatch):
+    """On expiry day the expiring weekly (hours of time value, meaningless vols) is not the email's headline."""
+    from datetime import datetime
+
+    s = Settings()
+    s.snapshot_path = FIX / "upstox_live_nifty_4exp_20261029.json"
+    s.instruments_path = FIX / "upstox_instruments_20261029.json"
+    svc = PricingService(s)
+    real_now = svc.now()
+    monkeypatch.setattr(svc, "now", lambda: datetime(2026, 11, 3, 10, 0, tzinfo=real_now.tzinfo))
+    f = F.build_feed(svc)
+    assert f["expiring_today"] == ["2026-11-03"]
+    assert [e["expiry"] for e in f["expiries"]] == ["2026-11-09", "2026-11-17", "2026-11-23"]
+    assert f["highlights"][0].startswith("Expiry day: the 03 Nov contract settles today")
+    assert len(svc.surface("NIFTY").smiles) == 4  # the dashboard still shows today's contract
