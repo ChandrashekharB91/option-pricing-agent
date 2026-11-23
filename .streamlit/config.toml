@@ -1,16 +1,14 @@
-# Local-only defaults: the dashboard listens on this machine only, so Windows does not ask an
-# administrator to allow it through the firewall, and no usage statistics are sent.
+# Shared by local runs and Streamlit Community Cloud. Local runs bind to this computer only through the
+# command line (scripts/share.py, or: python -m streamlit run src/optlib_app/dashboard.py --server.address 127.0.0.1)
+# so the hosted app is not affected.
 [server]
-address = "127.0.0.1"
-port = 8501
-headless = false
+headless = true
 
 [client]
 # readers of a shared link see no "Deploy" button or developer menu
 toolbarMode = "viewer"
 
 [browser]
-serverAddress = "localhost"
 gatherUsageStats = false
 
 # Two palettes: the sidebar "Dark mode" switch (or Settings > Theme) chooses between them.

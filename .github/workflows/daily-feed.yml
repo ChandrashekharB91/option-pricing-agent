@@ -1,0 +1,79 @@
+# The daily NIFTY options email, sent from GitHub's servers: no laptop needs to be on.
+#
+# Runs Monday-Friday, starts at 09:15 IST and waits until FEED_SEND_TIME (default 09:30 IST, 15 minutes after
+# the open) before fetching live Upstox quotes, so GitHub's usual few minutes of scheduling delay does not move
+# the send time. NSE holidays are skipped (Upstox's market calendar). Subscribers, the send log and yesterday's
+# numbers live in Cloudflare D1, shared with the app.
+#
+# Repository settings > Secrets and variables > Actions:
+#   secrets:   UPSTOX_ANALYTICS_TOKEN, SMTP_PASSWORD (Gmail app password), CLOUDFLARE_API_TOKEN (D1 edit)
+#   variables: SMTP_USER, MAIL_FROM (optional), FEED_PUBLIC_URL (the app's address, for email links),
+#              FEED_SEND_TIME (optional, HH:MM IST)
+# Run it by hand: Actions > Daily options email > Run workflow (optionally with a test address).
+# If a run fails, GitHub emails the repository owner.
+name: Daily options email
+
+on:
+  schedule:
+    - cron: "45 3 * * 1-5"  # 03:45 UTC = 09:15 IST, Mon-Fri
+  workflow_dispatch:
+    inputs:
+      test_to:
+        description: "Send one [TEST] copy to this address only (leave empty to send to all subscribers)"
+        required: false
+        default: ""
+      force:
+        description: "Send even if today's email already went out or today is a holiday"
+        type: boolean
+        default: false
+
+concurrency:
+  group: daily-feed
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      DATA_MODE: live
+      UPSTOX_ANALYTICS_TOKEN: ${{ secrets.UPSTOX_ANALYTICS_TOKEN }}
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: "587"
+      SMTP_SECURITY: starttls
+      SMTP_USER: ${{ vars.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      MAIL_FROM: ${{ vars.MAIL_FROM || vars.SMTP_USER }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      D1_DATABASE_NAME: option-pricing-agent
+      FEED_PUBLIC_URL: ${{ vars.FEED_PUBLIC_URL }}
+      FEED_LINKS: app
+      FEED_SEND_TIME: ${{ vars.FEED_SEND_TIME || '09:30' }}
+      TEST_TO: ${{ inputs.test_to }}
+      FORCE: ${{ inputs.force && '--force' || '' }}
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[app]"
+      - name: Check the settings
+        run: |
+          missing=""
+          for v in UPSTOX_ANALYTICS_TOKEN SMTP_USER SMTP_PASSWORD CLOUDFLARE_API_TOKEN; do
+            [ -z "${!v}" ] && missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets/variables:$missing (Settings > Secrets and variables > Actions)"
+            exit 1
+          fi
+      - name: Send the email
+        run: |
+          if [ -n "$TEST_TO" ]; then
+            python scripts/daily_feed.py --test "$TEST_TO"
+          else
+            python scripts/daily_feed.py --send --at "$FEED_SEND_TIME" $FORCE
+          fi

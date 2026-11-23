@@ -137,7 +137,7 @@ def test_end_to_end_outbox(svc, tmp_path):
     daily = next(m for m in mails if m["To"] == "reader@example.com" and m["Subject"].startswith("NIFTY options daily,")
                  and "[TEST]" not in m["Subject"])
     assert "unsubscribe?token=" + token in daily["List-Unsubscribe"]
-    assert (tmp_path / "history.jsonl").exists() and jobs.status()["counts"]["active"] == 1
+    assert jobs.store.previous_history("2999-01-01")["date"] == "2026-10-29" and jobs.status()["counts"]["active"] == 1
 
 
 def test_api_feed_flow(svc, tmp_path, monkeypatch):

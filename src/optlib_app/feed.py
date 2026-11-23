@@ -144,7 +144,10 @@ def _reference_options(svc, surf, smile, lot: int) -> list[dict]:
     return rows
 
 
-def build_feed(svc, underlying: str = "NIFTY", max_expiries: int = 4, history_path: Optional[Path] = None) -> dict:
+def build_feed(svc, underlying: str = "NIFTY", max_expiries: int = 4, history_path: Optional[Path] = None,
+               previous_values=None) -> dict:
+    """previous_values: a function day -> the last recorded values before that day (the store's history);
+    history_path: the same from a JSON-lines file."""
     all_exps = svc.expiries(underlying)
     today = svc.now().date()
     expiring_today = [e for e in all_exps if e == today]
@@ -214,7 +217,10 @@ def build_feed(svc, underlying: str = "NIFTY", max_expiries: int = 4, history_pa
         "smiles": [_smile_points(s) for s in smiles],
     }
     feed["vrp"] = (e0["atm_vol"] - hist["rv20"]) if hist["rv20"] else None
-    feed["previous"] = previous(history_path, feed["date"]) if history_path else None
+    if previous_values is not None:
+        feed["previous"] = previous_values(feed["date"])
+    else:
+        feed["previous"] = previous(history_path, feed["date"]) if history_path else None
     feed["changes"] = changes(feed, feed["previous"])
     feed["expiring_today"] = [e.isoformat() for e in expiring_today]
     feed["highlights"] = highlights(feed)

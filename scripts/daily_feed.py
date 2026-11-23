@@ -69,6 +69,32 @@ def explain_outbox() -> None:
               f"'.env.txt' by mistake)")
 
 
+def nse_holiday(day) -> str:
+    """Name of today's NSE F&O trading holiday from Upstox's public calendar, or '' (also '' if unreachable)."""
+    import requests
+
+    try:
+        rows = requests.get(f"https://api.upstox.com/v2/market/holidays/{day.isoformat()}", timeout=20).json()["data"]
+    except Exception:  # noqa: BLE001 - if the calendar is down, try to send; quotes will tell
+        return ""
+    for h in rows or []:
+        if h.get("holiday_type") == "TRADING_HOLIDAY" and "NFO" in (h.get("closed_exchanges") or []):
+            return h.get("description") or "trading holiday"
+    return ""
+
+
+def wait_until(hhmm: str, max_wait_min: int = 45) -> None:
+    import time
+
+    hh, mm = (int(x) for x in hhmm.split(":"))
+    now = datetime.now(IST)
+    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    secs = (target - now).total_seconds()
+    if 0 < secs <= max_wait_min * 60:
+        print(f"Waiting until {hhmm} IST ({secs / 60:.1f} min) ...", flush=True)
+        time.sleep(secs)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group()
@@ -80,7 +106,10 @@ def main() -> int:
     g.add_argument("--subscribers", action="store_true", help="list subscribers")
     g.add_argument("--add", metavar="EMAIL", help="sign up an address (a confirmation email goes out)")
     ap.add_argument("--name", default="", help="with --add: the reader's name")
-    ap.add_argument("--force", action="store_true", help="send even if today's feed already went out, or on a weekend")
+    ap.add_argument("--force", action="store_true",
+                    help="send even if today's feed already went out, or on a weekend or NSE holiday")
+    ap.add_argument("--at", metavar="HH:MM", help="wait until this IST time before fetching quotes (the cloud "
+                                                  "scheduler can start a few minutes early)")
     ap.add_argument("--underlying", default="NIFTY")
     ap.add_argument("--no-open", action="store_true", help="with --preview: do not open the browser")
     a = ap.parse_args()
@@ -94,7 +123,7 @@ def main() -> int:
     if a.signup:
         return open_signup(jobs.public_url)
     print(f"Data: {svc.mode} · mail: {jobs.mail.describe()}")
-    print(f"Subscriber list: {jobs.store.path.resolve()}")
+    print(f"Subscriber list: {jobs.store.where}")
     if jobs.mail.mode == "outbox":
         explain_outbox()
 
@@ -113,9 +142,16 @@ def main() -> int:
         return 0
 
     now = datetime.now(IST)
-    if a.send and svc.mode == "live" and now.weekday() >= 5 and not a.force:
-        print("Weekend: no trading today, nothing sent (use --force to override).")
-        return 0
+    if a.send and svc.mode == "live" and not a.force:
+        if now.weekday() >= 5:
+            print("Weekend: no trading today, nothing sent (use --force to override).")
+            return 0
+        holiday = nse_holiday(now.date())
+        if holiday:
+            print(f"NSE holiday today ({holiday}): nothing sent (use --force to override).")
+            return 0
+    if a.at:
+        wait_until(a.at)
 
     feed = jobs.build(a.underlying)
     print(f"Feed for {feed['date']} (snapshot {feed['as_of'][11:16]} IST): {feed['underlying']} {feed['spot']:,.2f}, "

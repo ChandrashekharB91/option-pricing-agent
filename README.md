@@ -167,6 +167,30 @@ the projector. Each idea is settled at NIFTY's actual expiry close after charges
 The output is `reports/backtest_report.html` and `reports/backtest_summary.json`; per-trade rows go to
 `data/backtest/trades.csv.gz`.
 
+## Running in the cloud (no laptop needed)
+
+| Part | Where it runs | What it does |
+| --- | --- | --- |
+| Daily email | GitHub Actions (`.github/workflows/daily-feed.yml`) | Mon-Fri at 09:30 IST (15 minutes after the open): live Upstox quotes, builds the feed, emails every active subscriber. Skips NSE holidays. A failed run emails you. |
+| Accounts, subscribers, history, send log | Cloudflare D1 database `option-pricing-agent` | One list shared by the job and the app |
+| The app (sign-up, log-in, every tab) | Streamlit Community Cloud | Fixed address such as `https://nifty-options-agent.streamlit.app`; starts its own pricing service |
+
+One-time setup:
+
+1. **Cloudflare API token.** https://dash.cloudflare.com/profile/api-tokens > Create Token > Custom token >
+   Permissions: *Account · D1 · Edit* > Create. Add `CLOUDFLARE_API_TOKEN=...` to `.env`.
+2. **Run** `python scripts/cloud_setup.py`. It checks the token, copies your subscriber list to D1, writes
+   `cloud_secrets.toml`, and sets the GitHub secrets and variables (or lists them for you to add on github.com:
+   *Settings > Secrets and variables > Actions*).
+3. **Deploy the app.** https://share.streamlit.io > sign in with GitHub > Create app > this repository, branch
+   `main`, file `src/optlib_app/dashboard.py`, custom address `nifty-options-agent` > Advanced settings: Python
+   3.12, and paste `cloud_secrets.toml` into Secrets > Deploy.
+4. **Test.** GitHub > Actions > *Daily options email* > Run workflow, with your address as the test address.
+
+The time is `FEED_SEND_TIME` (repository variable, default `09:30`); the job starts at 09:15 IST and waits, because
+GitHub can start scheduled runs a few minutes late. A Community Cloud app that nobody opens for a while goes to
+sleep and wakes in about a minute on the next visit; the daily email does not depend on it.
+
 ## Sharing the app (one link, everyone logs in)
 
 ```powershell
@@ -248,7 +272,7 @@ schtasks /Run /TN "NIFTY options daily"       # try it once now
 ```
 
 Market holidays are not detected yet: on a holiday the script sends the last available quotes, so pause the task
-on NSE holidays. The send log is `data/feed/sent.jsonl`; the day-on-day changes use `data/feed/history.jsonl`.
+on NSE holidays. The send log and the day-on-day history are kept in the subscriber database.
 
 **Compliance note.** The email is market information, not research or advice. Sending recommendations to
 people outside the desk would need SEBI research-analyst or investment-adviser registration, which is why the

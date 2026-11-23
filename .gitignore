@@ -16,3 +16,6 @@ dist/
 reports/regression_report.md
 reports/feed/
 tools/
+
+# settings for the hosted app, written by scripts/cloud_setup.py (contains secrets)
+cloud_secrets.toml

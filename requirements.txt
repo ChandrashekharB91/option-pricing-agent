@@ -1,0 +1,2 @@
+# Streamlit Community Cloud installs from this file: the project itself with the app extras.
+.[app]

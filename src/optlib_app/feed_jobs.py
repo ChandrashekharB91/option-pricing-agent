@@ -18,7 +18,8 @@ from typing import Optional
 from urllib.parse import quote
 
 from .config import ROOT, get_setting
-from .feed import DISCLAIMER, build_feed, record
+from .d1 import connect_from_settings
+from .feed import DISCLAIMER, build_feed, snapshot_values
 from .feed_email import render
 from .mailer import Mailer, MailSettings, build_message
 from .subscribers import CONSENT_TEXT, SubscriberStore, SubscriptionError, normalise_email
@@ -31,7 +32,9 @@ class FeedJobs:
     def __init__(self, svc, feed_dir: Path = FEED_DIR, get=get_setting):
         self.svc = svc
         self.dir = Path(feed_dir)
-        self.store = SubscriberStore(self.dir / "subscribers.db")
+        # Cloudflare D1 when CLOUDFLARE_API_TOKEN is set (shared by the app and the scheduled cloud job),
+        # otherwise a local SQLite file
+        self.store = SubscriberStore(self.dir / "subscribers.db", remote=connect_from_settings(get))
         self.mail = MailSettings.from_settings(get, self.dir / "outbox")
         self.public_url = (get("FEED_PUBLIC_URL", "") or get("PRICING_API_URL", "http://127.0.0.1:8000")).rstrip("/")
         self.admin_key = get("FEED_ADMIN_KEY", "")
@@ -39,8 +42,6 @@ class FeedJobs:
         # who may use admin screens in the shared app (comma-separated); default: the sending mailbox
         admins = get("ADMIN_EMAILS", "") or get("SMTP_USER", "") or get("MAIL_FROM", "")
         self.admins = {a.strip().lower() for a in admins.split(",") if a.strip()}
-        self.history_path = self.dir / "history.jsonl"
-        self.log_path = self.dir / "sent.jsonl"
 
     # links ------------------------------------------------------------------
     def link(self, action: str, token: str) -> str:
@@ -102,7 +103,7 @@ class FeedJobs:
     # sign-up ----------------------------------------------------------------
     def subscribe(self, email: str, name: str = "", consent: bool = False, source: str = "dashboard") -> dict:
         sub = self.store.subscribe(email, name, consent, source)
-        log.info("feed sign-up %s -> %s (list %s)", sub.email, sub.status, self.store.path.resolve())
+        log.info("feed sign-up %s -> %s (list %s)", sub.email, sub.status, self.store.where)
         if sub.status == "active":
             return {"status": "active", "email": sub.email,
                     "message": f"{sub.email} is already subscribed; nothing to do."}
@@ -142,7 +143,7 @@ class FeedJobs:
 
     # the feed ---------------------------------------------------------------
     def build(self, underlying: str = "NIFTY") -> dict:
-        return build_feed(self.svc, underlying, history_path=self.history_path)
+        return build_feed(self.svc, underlying, previous_values=self.store.previous_history)
 
     def preview_html(self, feed: Optional[dict] = None, name: str = "") -> str:
         feed = feed or self.build()
@@ -154,9 +155,7 @@ class FeedJobs:
                    for r in self._log())
 
     def _log(self) -> list[dict]:
-        if not self.log_path.exists():
-            return []
-        return [json.loads(x) for x in self.log_path.read_text(encoding="utf-8").splitlines() if x.strip()]
+        return self.store.logs()
 
     def send(self, to: Optional[list[str]] = None, force: bool = False, feed: Optional[dict] = None) -> dict:
         """Send today's feed. ``to`` = test addresses (sent without needing a subscription); otherwise every
@@ -177,14 +176,12 @@ class FeedJobs:
             subject = ("[TEST] " if test else "") + m.subject
             messages.append(build_message(self.mail, email, subject, m.html, m.text, m.images, unsubscribe_url=unsub))
         results = Mailer(self.mail).send(messages) if messages else []
-        record(feed, self.history_path)
+        self.store.save_history(snapshot_values(feed))
         entry = {"at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "date": feed["date"],
                  "kind": "test" if test else "daily", "mode": self.mail.mode,
                  "sent": sum(r["ok"] for r in results), "failed": sum(not r["ok"] for r in results),
                  "errors": [r for r in results if not r["ok"]][:20]}
-        self.dir.mkdir(parents=True, exist_ok=True)
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry) + "\n")
+        self.store.add_log(entry)
         msg = (f"{entry['sent']} sent, {entry['failed']} failed ({self.mail.describe()})" if recipients
                else "no active subscribers yet")
         return {**entry, "skipped": False, "message": msg,
@@ -193,7 +190,7 @@ class FeedJobs:
     def status(self) -> dict:
         log = self._log()
         return {"mail": self.mail.describe(), "mode": self.mail.mode, "public_url": self.public_url,
-                "subscriber_db": str(self.store.path.resolve()),
+                "subscriber_db": str(self.store.where),
                 "counts": self.store.counts(), "last_send": log[-1] if log else None,
                 "admin_key_required": bool(self.admin_key)}
 

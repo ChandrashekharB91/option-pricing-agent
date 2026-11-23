@@ -15,6 +15,22 @@ from optlib_app.config import get_setting
 from optlib_app.client import PricingAPIError, PricingClient
 
 st.set_page_config(page_title="Option Pricing Agent", page_icon="◆", layout="wide")
+
+
+def _load_hosted_secrets() -> None:
+    """On Streamlit Community Cloud settings arrive as st.secrets; copy the flat ones into the environment so the
+    pricing service, Upstox client, mailer and D1 store read them like a local .env."""
+    import os
+
+    try:
+        for k, v in st.secrets.items():
+            if isinstance(v, (str, int, float, bool)):
+                os.environ.setdefault(k, str(v))
+    except Exception:  # noqa: BLE001 - no secrets file locally: .env is used instead
+        pass
+
+
+_load_hosted_secrets()
 THEME = ui.current_theme()
 DARK = THEME == "dark"
 ui.inject_css(THEME)
@@ -31,7 +47,35 @@ DEFAULT_BOOK = pd.DataFrame([
 
 @st.cache_resource
 def api(url: str) -> PricingClient:
-    return PricingClient(url)
+    """The pricing service. If none is running (a hosted single-process deploy such as Streamlit Community Cloud),
+    start it inside this process on 127.0.0.1; EMBEDDED_API=off disables that."""
+    client = PricingClient(url)
+    try:
+        client.health()
+    except Exception:  # noqa: BLE001 - not running: start our own
+        if get_setting("EMBEDDED_API", "auto").lower() != "off":
+            _start_embedded_api(url, client)
+    return client
+
+
+def _start_embedded_api(url: str, client: PricingClient) -> None:
+    import threading
+    import time
+    from urllib.parse import urlparse
+
+    import uvicorn
+
+    from optlib_app.api import app as api_app
+
+    port = urlparse(url).port or 8000
+    server = uvicorn.Server(uvicorn.Config(api_app, host="127.0.0.1", port=port, log_level="warning"))
+    threading.Thread(target=server.run, name="embedded-api", daemon=True).start()
+    for _ in range(120):  # up to a minute: the first build of the surface fetches live data
+        try:
+            client.health()
+            return
+        except Exception:  # noqa: BLE001
+            time.sleep(0.5)
 
 
 def show(fig: go.Figure, where=st) -> None:

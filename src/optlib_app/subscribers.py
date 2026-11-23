@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import sqlite3
@@ -102,9 +103,13 @@ def normalise_email(email: str) -> str:
 
 
 class SubscriberStore:
-    def __init__(self, path: Path):
+    """Local SQLite file by default; pass ``remote`` (a D1Connection) to keep everything in Cloudflare D1."""
+
+    def __init__(self, path: Path, remote=None):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.remote = remote
+        if remote is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         with self._db() as db:
             db.execute("""CREATE TABLE IF NOT EXISTS subscribers (
@@ -116,10 +121,21 @@ class SubscriberStore:
                     db.execute(f"ALTER TABLE subscribers ADD COLUMN {col} TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, email TEXT NOT NULL,
                 created_at TEXT NOT NULL, expires_at TEXT NOT NULL)""")
+            # the daily feed's memory: one row of key numbers per day, and one row per send
+            db.execute("CREATE TABLE IF NOT EXISTS feed_history (date TEXT PRIMARY KEY, data TEXT NOT NULL)")
+            db.execute("""CREATE TABLE IF NOT EXISTS feed_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at TEXT NOT NULL,
+                date TEXT NOT NULL, kind TEXT NOT NULL, data TEXT NOT NULL)""")
+
+    @property
+    def where(self) -> str:
+        return "Cloudflare D1 (cloud)" if self.remote is not None else str(self.path.resolve())
 
     @contextmanager
     def _db(self):
         """A connection that commits on success and is always closed (Windows keeps open files locked)."""
+        if self.remote is not None:
+            yield self.remote
+            return
         db = sqlite3.connect(self.path)
         db.row_factory = sqlite3.Row
         try:
@@ -301,6 +317,27 @@ class SubscriberStore:
 
     def active(self) -> list[Subscriber]:
         return self.all("active")
+
+    # feed history and send log -------------------------------------------------------
+    def save_history(self, values: dict) -> None:
+        with self._lock, self._db() as db:
+            db.execute("INSERT OR REPLACE INTO feed_history (date, data) VALUES (?, ?)",
+                       (values["date"], json.dumps(values)))
+
+    def previous_history(self, day: str) -> Optional[dict]:
+        with self._db() as db:
+            r = db.execute("SELECT data FROM feed_history WHERE date < ? ORDER BY date DESC LIMIT 1", (day,)).fetchone()
+        return json.loads(r["data"]) if r else None
+
+    def add_log(self, entry: dict) -> None:
+        with self._lock, self._db() as db:
+            db.execute("INSERT INTO feed_log (at, date, kind, data) VALUES (?, ?, ?, ?)",
+                       (entry["at"], entry["date"], entry["kind"], json.dumps(entry)))
+
+    def logs(self, limit: int = 200) -> list[dict]:
+        with self._db() as db:
+            rows = db.execute("SELECT data FROM feed_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [json.loads(r["data"]) for r in reversed(rows)]
 
     def counts(self) -> dict:
         with self._db() as db:
