@@ -24,6 +24,8 @@ from optlib.pricing import price_option
 from optlib.recommender import ewma_vol
 from optlib.validator import validate
 
+from .marketstats import iv_rank, max_pain
+
 DISCLAIMER = ("This email is market information and analytics for education and research only. It is not "
               "investment advice, a research report or a recommendation to buy, sell or hold any security or "
               "derivative, and it does not consider anyone's objectives or circumstances. Figures come from "
@@ -120,7 +122,9 @@ def _open_interest(chain) -> dict:
     return {"call_oi": c_oi, "put_oi": p_oi, "pcr": p_oi / c_oi if c_oi else None,
             "pcr_prev": (p_prev / c_prev) if c_prev and p_prev else None,
             "call_oi_change": c_oi - c_prev if c_prev else None, "put_oi_change": p_oi - p_prev if p_prev else None,
-            "top_calls": top(calls), "top_puts": top(puts)}
+            "top_calls": top(calls), "top_puts": top(puts),
+            "max_pain": max_pain(sorted({q.strike for q in chain.quotes}),
+                                 {q.strike: q.oi for q in calls}, {q.strike: q.oi for q in puts})}
 
 
 def _reference_options(svc, surf, smile, lot: int) -> list[dict]:
@@ -217,6 +221,11 @@ def build_feed(svc, underlying: str = "NIFTY", max_expiries: int = 4, history_pa
         "smiles": [_smile_points(s) for s in smiles],
     }
     feed["vrp"] = (e0["atm_vol"] - hist["rv20"]) if hist["rv20"] else None
+    try:
+        feed["iv_rank"] = {k: v for k, v in iv_rank(svc.history(), as_of.date(), e0["atm_vol"]).items()
+                           if k not in ("dates", "series")}
+    except Exception:  # noqa: BLE001 - optional
+        feed["iv_rank"] = {"available": False}
     if previous_values is not None:
         feed["previous"] = previous_values(feed["date"])
     else:

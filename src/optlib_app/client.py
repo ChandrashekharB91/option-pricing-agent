@@ -97,6 +97,38 @@ class PricingClient:
     def ask(self, question: str, history: Optional[list] = None):
         return self._req("POST", "/agent/ask", json={"question": question, "history": history or []})
 
+    # desk statistics, news, AI note, PDFs ------------------------------------
+    def iv_stats(self, underlying: str = "NIFTY"):
+        return self._req("GET", f"/stats/iv/{underlying}")
+
+    def open_interest(self, underlying: str = "NIFTY", expiry: Optional[str] = None):
+        return self._req("GET", f"/oi/{underlying}", params={"expiry": expiry} if expiry else None)
+
+    def news(self, limit: int = 12):
+        return self._req("GET", "/news", params={"limit": limit})["items"]
+
+    def market_note(self, underlying: str = "NIFTY"):
+        return self._req("GET", f"/insights/note/{underlying}")
+
+    def strategy_from_text(self, text: str, underlying: str = "NIFTY"):
+        return self._req("POST", "/strategy/from_text", json={"text": text, "underlying": underlying})
+
+    def _bytes(self, method: str, path: str, **kw) -> bytes:
+        resp = self.session.request(method, f"{self.base_url}{path}", timeout=self.timeout, **kw)
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json().get("detail", resp.text)
+            except ValueError:
+                detail = resp.text
+            raise PricingAPIError(resp.status_code, str(detail))
+        return resp.content
+
+    def daily_pdf(self, underlying: str = "NIFTY") -> bytes:
+        return self._bytes("GET", "/feed/pdf", params={"underlying": underlying})
+
+    def strategy_pdf(self, idea: dict, context: Optional[dict] = None) -> bytes:
+        return self._bytes("POST", "/strategy/pdf", json={"idea": idea, "context": context or {}})
+
     # daily feed -------------------------------------------------------------
     def _admin(self, admin_key: str = "") -> dict:
         return {"X-Admin-Key": admin_key} if admin_key else {}

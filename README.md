@@ -19,6 +19,10 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | Streamlit dashboard: market & smile, pricer, book risk, agent chat | Done |
 | Risk: historical VaR/ES, backtest, stress tests, limits, P&L explain, HTML risk report | Done (Phase 2); limits are placeholders until risk sets them |
 | Strategy lab: recommender, P&L projector, hedge finder | Done (Phase 3); margins are estimates; bhavcopy backtest pending |
+| Desk overview: India VIX 1-year rank, open interest by strike, PCR, max pain, market news | Done |
+| AI market note (Gemini or the agent's model), checked number by number, in the app and the email | Done; needs `GEMINI_API_KEY` |
+| Plain-English strategy builder ("2 lakh, NIFTY to 24,500 by Friday, low risk") | Done |
+| PDF exports: daily market report and any strategy | Done |
 
 ## Run the app (local)
 
@@ -166,6 +170,34 @@ the projector. Each idea is settled at NIFTY's actual expiry close after charges
 
 The output is `reports/backtest_report.html` and `reports/backtest_summary.json`; per-trade rows go to
 `data/backtest/trades.csv.gz`.
+
+## Desk overview, news, AI note, plain-English strategies, PDFs
+
+- **Overview** (first tab): spot, India VIX with its 1-year rank and percentile, weekly ATM implied vol, the expected
+  move to expiry, put/call open-interest ratio and max pain; the VIX year with today's ATM vol marked; open interest by
+  strike; top market headlines; the AI market note; a one-click PDF of the day's report.
+- **Open interest**: OI by strike for any expiry (puts left, calls right, strikes within 4 expected moves), the day's
+  OI change, PCR and its change, max pain, largest positions.
+- **News**: headlines from Economic Times, Mint, Business Standard and Google News (public RSS), ranked for relevance
+  to index options and recency, filterable; only titles and links are shown. Override the sources with `NEWS_FEEDS`
+  (`Name|url,Name|url`). The top six also go into the daily email.
+- **AI market note**: 3-4 sentences on the day, written by a language model from the day's computed numbers and the
+  headlines. It is published only if every number in it is found in the data and it contains no advice wording;
+  otherwise it is rewritten once and then dropped (the email goes without it). Model: `GEMINI_API_KEY` (free key from
+  aistudio.google.com; optional `GEMINI_MODEL`), or `INSIGHTS_PROVIDER/INSIGHTS_API_KEY/INSIGHTS_MODEL`, or the
+  agent's model. For the hosted app add the key to the Streamlit secrets; for the email add it as the
+  `GEMINI_API_KEY` repository secret.
+- **Describe your idea** (top of the Strategy lab): e.g. "I have 2 lakh and expect NIFTY to reach 24,500 by next
+  Friday, low risk". A deterministic parser reads the numbers (capital in rupees/k/lakh/crore, a level, a % move or
+  a range, a date or "this week"/"next Friday"); keyword rules (and the model, if configured, only for what they
+  leave open) read direction, risk, objective and a volatility view. The result is the ordinary recommender run, with
+  everything assumed listed next to it.
+- **PDF**: "Prepare today's report" on the Overview (the email's content as an A4 report) and "Prepare PDF of this
+  strategy" under any inspected idea (legs, payoff, Greeks, outcomes under each view, costs, disclaimer). API:
+  `GET /feed/pdf`, `POST /strategy/pdf`.
+
+API endpoints: `GET /stats/iv/{underlying}`, `GET /oi/{underlying}?expiry=`, `GET /news`,
+`GET /insights/note/{underlying}` (cached one hour), `POST /strategy/from_text`.
 
 ## Running in the cloud (no laptop needed)
 

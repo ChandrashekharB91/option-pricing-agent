@@ -47,6 +47,9 @@ jobs:
       MAIL_FROM_NAME: ${{ vars.MAIL_FROM_NAME || 'NIFTY Options Daily' }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       D1_ACCOUNT_ID: ${{ vars.D1_ACCOUNT_ID }}
+      # optional: the AI market note (free key from aistudio.google.com); without it the email has no note
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
       D1_DATABASE_NAME: option-pricing-agent
       FEED_PUBLIC_URL: ${{ vars.FEED_PUBLIC_URL }}
       FEED_LINKS: app
