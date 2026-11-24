@@ -12,6 +12,7 @@ GEMINI_MODEL) uses Google Gemini; else the agent's LLM (LLM_PROVIDER ...).
 from __future__ import annotations
 
 import json
+import logging
 import re
 from types import SimpleNamespace
 from typing import Callable, Optional
@@ -28,6 +29,10 @@ or two news themes from the headlines.
 Rules: use ONLY numbers that appear in the data given, written the same way (you may round to fewer decimals);
 do not compute new numbers; describe, do not predict or advise (never say buy, sell, should, opportunity, target);
 plain English, no markdown, no bullet points, no greeting."""
+# room for "thinking" models (Gemini 3.x Flash counts its reasoning tokens against this limit)
+MAX_TOKENS = 4096
+log = logging.getLogger(__name__)
+LAST_PROBLEM = {"text": ""}  # why the last note was not published (shown by scripts/check_ai_note.py)
 
 
 def insights_llm(get: Callable[[str, str], str]):
@@ -77,9 +82,11 @@ def facts(feed: dict) -> dict:
 def market_note(feed: dict, headlines: Optional[list[dict]] = None, llm=None,
                 get: Optional[Callable[[str, str], str]] = None) -> Optional[dict]:
     """{"text", "model", "checks"} or None when no model is configured or the text fails the checks."""
+    LAST_PROBLEM["text"] = ""
     try:
         llm = llm or insights_llm(get)
-    except LLMNotConfigured:
+    except LLMNotConfigured as exc:
+        LAST_PROBLEM["text"] = f"no model configured: {exc}"
         return None
     data = facts(feed)
     heads = [h["title"] for h in (headlines or [])[:8]]
@@ -88,8 +95,10 @@ def market_note(feed: dict, headlines: Optional[list[dict]] = None, llm=None,
     messages = [{"role": "user", "content": user}]
     for attempt in range(2):
         try:
-            reply = llm.chat(SYSTEM, messages, tools=None, max_tokens=400)
-        except LLMError:
+            reply = llm.chat(SYSTEM, messages, tools=None, max_tokens=MAX_TOKENS)
+        except LLMError as exc:
+            LAST_PROBLEM["text"] = f"model call failed: {exc}"
+            log.warning("AI note: %s", LAST_PROBLEM["text"])
             return None
         text = re.sub(r"\s+", " ", (reply.text or "").replace("*", "")).strip()
         loose = ungrounded_numbers(text, user, [record])
@@ -104,6 +113,8 @@ def market_note(feed: dict, headlines: Optional[list[dict]] = None, llm=None,
             problems.append(f"remove advice wording: {', '.join(sorted({a if isinstance(a, str) else a[0] for a in advice}))}")
         if not text:
             problems.append("the note was empty")
+        LAST_PROBLEM["text"] = f"attempt {attempt + 1}: " + "; ".join(problems) + (f" | text: {text[:300]}" if text else "")
+        log.warning("AI note rejected, %s", LAST_PROBLEM["text"])
         messages += [{"role": "assistant", "content": text or "(empty)"},
                      {"role": "user", "content": "Rewrite the note. " + "; ".join(problems) + "."}]
     return None

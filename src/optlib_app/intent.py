@@ -168,7 +168,7 @@ def classify(text: str, llm=None) -> dict:
         out["no_naked"] = True
     if llm is not None and (out["direction"] is None or out["risk"] is None):
         try:
-            reply = llm.chat(SYSTEM, [{"role": "user", "content": text}], tools=None, max_tokens=200)
+            reply = llm.chat(SYSTEM, [{"role": "user", "content": text}], tools=None, max_tokens=2048)
             m = re.search(r"\{.*\}", reply.text or "", re.S)
             got = json.loads(m.group(0)) if m else {}
         except Exception:  # noqa: BLE001 - the model is optional; the rules still give an answer
