@@ -14,10 +14,10 @@ import streamlit.components.v1 as components
 
 PALETTES = {
     "light": dict(bg="#f6f7fb", card="#ffffff", soft="#f1f4fa", ink="#0f172a", muted="#64748b", line="#e3e8f1",
-                  accent="#4f46e5", accent_soft="rgba(79,70,229,0.08)", hero1="#0b1220", hero2="#1e1b4b",
+                  accent="#4f46e5", accent_soft="rgba(79,70,229,0.08)", accent2="#7c3aed", accent_glow="rgba(79,70,229,0.28)", pill1="#4f46e5", pill2="#7c3aed", hero1="#0b1220", hero2="#1e1b4b",
                   shadow="0 1px 2px rgba(15,23,42,.04), 0 4px 14px rgba(15,23,42,.05)"),
     "dark": dict(bg="#0b1220", card="#111a2e", soft="#0f1729", ink="#e2e8f0", muted="#94a3b8", line="#22304a",
-                 accent="#818cf8", accent_soft="rgba(129,140,248,0.12)", hero1="#111a2e", hero2="#1e1b4b",
+                 accent="#818cf8", accent_soft="rgba(129,140,248,0.12)", accent2="#a78bfa", accent_glow="rgba(99,102,241,0.35)", pill1="#4f46e5", pill2="#7c3aed", hero1="#111a2e", hero2="#1e1b4b",
                  shadow="0 1px 2px rgba(0,0,0,.3), 0 6px 18px rgba(0,0,0,.25)"),
 }
 STATUS = {"PASS": "#16a34a", "WARN": "#d97706", "FAIL": "#dc2626", "SKIP": "#6b7280"}
@@ -53,7 +53,7 @@ def theme_switch(where=st.sidebar) -> bool:
 def inject_css(theme: str) -> None:
     p = PALETTES[theme]
     st.markdown(f"""<style>
-:root {{ --card:{p['card']}; --soft:{p['soft']}; --ink:{p['ink']}; --muted:{p['muted']}; --line:{p['line']};
+:root {{ --bg:{p['bg']}; --card:{p['card']}; --soft:{p['soft']}; --ink:{p['ink']}; --muted:{p['muted']}; --line:{p['line']};
         --accent:{p['accent']}; --accent-soft:{p['accent_soft']}; --shadow:{p['shadow']}; }}
 .block-container {{ padding-top: 3.6rem; padding-bottom: 3rem; max-width: 1400px; }}
 h1, h2, h3, h4 {{ letter-spacing: -0.01em; }}
@@ -62,9 +62,34 @@ h1, h2, h3, h4 {{ letter-spacing: -0.01em; }}
 [data-testid="stMetricLabel"] p {{ font-size: 0.74rem; text-transform: uppercase; letter-spacing: .06em;
         color: var(--muted); font-weight: 600; }}
 [data-testid="stMetricValue"] {{ font-size: 1.55rem; font-weight: 700; font-variant-numeric: tabular-nums; }}
-.stTabs [data-baseweb="tab-list"] {{ gap: 4px; border-bottom: 1px solid var(--line); }}
-.stTabs [data-baseweb="tab"] {{ padding: 8px 14px; border-radius: 8px 8px 0 0; font-weight: 600; }}
-.stTabs [aria-selected="true"] {{ background: var(--accent-soft); }}
+/* main navigation: a card of icon tabs, sticky while scrolling, account pinned right.
+   (no ">" combinators: Streamlit's markdown escapes them inside <style>) */
+.stTabs [role="tablist"] {{ position: sticky; top: 3.9rem; z-index: 60; margin-bottom: 14px; gap: 1px;
+        padding: 5px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+        box-shadow: var(--shadow), 0 -14px 0 6px var(--bg); }}
+.stTabs [role="tablist"]::-webkit-scrollbar {{ display: none; }}
+.stTabs [role="tab"], .stTabs [role="tab"][aria-selected="true"] {{ border: none !important; outline-offset: 2px; }}
+.stTabs [role="tab"]::before, .stTabs [role="tab"]::after {{ display: none !important; }}
+.stTabs .react-aria-SelectionIndicator {{ display: none !important; }}
+.stTabs [role="tab"] {{ flex: 0 0 auto; padding: 7px 9px; border-radius: 10px; font-weight: 600; color: var(--muted);
+        transition: background .15s ease, color .15s ease, box-shadow .15s ease; }}
+.stTabs [role="tab"] p {{ font-size: 0.83rem; font-weight: 600; color: inherit; white-space: nowrap; }}
+.stTabs [role="tab"] span[role="img"] {{ font-size: 1.08rem !important; margin-right: 2px; vertical-align: -3px !important; }}
+.stTabs [role="tab"]:hover {{ color: var(--ink); background: var(--soft); }}
+.stTabs [role="tab"][aria-selected="true"] {{ color: #ffffff;
+        background: linear-gradient(135deg, {p['pill1']} 0%, {p['pill2']} 100%);
+        box-shadow: 0 1px 2px rgba(0,0,0,.15), 0 6px 16px {p['accent_glow']}; }}
+.stTabs [role="tab"]:last-child {{ margin-left: auto; }}
+@media (max-width: 1680px) {{ .stTabs [role="tab"]:last-child p {{ font-size: 0 !important; }}
+        .stTabs [role="tab"]:last-child p span[role="img"] {{ margin-right: 0; }}
+        .stTabs .stTabs [role="tab"]:last-child p {{ font-size: 0.83rem !important; }} }}
+/* tabs inside a page stay light: underline style, not sticky */
+.stTabs .stTabs [role="tablist"] {{ position: static; margin-bottom: 6px; padding: 0; background: transparent;
+        border: none; box-shadow: none; border-bottom: 1px solid var(--line); border-radius: 0; }}
+.stTabs .stTabs [role="tab"] {{ border-radius: 8px 8px 0 0; padding: 8px 12px; }}
+.stTabs .stTabs [role="tab"]:last-child {{ margin-left: 0; }}
+.stTabs .stTabs [role="tab"][aria-selected="true"] {{ color: var(--accent); background: var(--accent-soft);
+        box-shadow: inset 0 -2px 0 var(--accent); }}
 [data-testid="stPlotlyChart"], [data-testid="stDataFrame"] {{ background: var(--card); border: 1px solid var(--line);
         border-radius: 12px; padding: 6px; box-shadow: var(--shadow); }}
 [data-testid="stExpander"] details {{ border-radius: 12px; border-color: var(--line); background: var(--card); }}

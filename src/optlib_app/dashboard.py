@@ -157,8 +157,12 @@ ui.hero(f"{underlying} options desk", f"{ov['spot']:,.2f}",
 
 dash_auth._flash(toast=True)  # messages from email links and account changes, as pop-ups
 (tab_over, tab_market, tab_oi, tab_price, tab_book, tab_risk, tab_strat, tab_news, tab_agent, tab_feed,
- tab_acct) = st.tabs(["Overview", "Market & smile", "Open interest", "Pricer", "Book risk", "Risk (VaR, stress, P&L)",
-                      "Strategy lab", "News", "Ask the agent", "Daily email", "My account"])
+ tab_acct) = st.tabs([":material/space_dashboard: Overview", ":material/ssid_chart: Volatility",
+                     ":material/stacked_bar_chart: Open interest", ":material/calculate: Pricer",
+                     ":material/account_balance_wallet: Positions", ":material/shield: Risk",
+                     ":material/science: Strategies", ":material/newspaper: News",
+                     ":material/auto_awesome: AI analyst", ":material/mail: Daily brief",
+                     ":material/account_circle: Account"])
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -255,7 +259,7 @@ with tab_over:
             if items:
                 ui.news_list(items[:7], ago)
                 st.caption("Top headlines from Economic Times, Mint, Business Standard and Google News, ranked for "
-                           "relevance to index options. More in the **News** tab.")
+                           "relevance to index options. More under **News**.")
             else:
                 st.caption("No headlines right now.")
         except PricingAPIError as exc:
@@ -493,7 +497,7 @@ with tab_book:
 
 # ------------------------------------------------------------------ risk (phase 2)
 with tab_risk:
-    st.caption("Uses the book from the **Book risk** tab. VaR and ES by historical simulation with full revaluation; "
+    st.caption("Uses the book from **Positions**. VaR and ES by historical simulation with full revaluation; "
                "stress tests replay real market days and hypothetical shocks; P&L explain uses NSE end-of-day prices.")
     positions = [dict(underlying=underlying, **row) for row in book.dropna().to_dict("records")]
     c = st.columns([1, 1, 2])
@@ -848,7 +852,7 @@ with tab_strat:
             show(charts.pnl_heatmap(proj["grid"]))
 
     with hedge_tab:
-        st.caption("Uses the book from the **Book risk** tab. Searches futures, single calls or puts, call + put "
+        st.caption("Uses the book from **Positions**. Searches futures, single calls or puts, call + put "
                    "pairs (both wings, unequal lots allowed) and spreads, 1 to 3 lots each, within your cash budget. "
                    "Each hedge is judged on the loss if the index rises and if it falls (3-sd moves to expiry).")
         h1, h2 = st.columns(2)
