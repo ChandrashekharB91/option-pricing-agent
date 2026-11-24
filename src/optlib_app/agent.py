@@ -232,6 +232,61 @@ def _idea(i: dict, source: str) -> dict:
             "greeks": i["greeks"], "why_this_strategy": (i.get("rationale") or {}).get("text", "")}
 
 
+def _compact_num(x):
+    if isinstance(x, float):
+        if x != x or x in (float("inf"), float("-inf")):
+            return None
+        return round(x, 2) if abs(x) >= 100 else round(x, 5)
+    return x
+
+
+def for_llm(name: str, out):
+    """What the model sees of a tool result: the same numbers, without bulk (passing checks, extra ideas, raw rows).
+
+    The full result is kept for the validator's deterministic statuses and the number-grounding check."""
+    def walk(x):
+        if isinstance(x, dict):
+            if "checks" in x and "status" in x and isinstance(x["checks"], list):  # a validation report
+                bad = [f"{c.get('name')}: {c.get('detail')}" for c in x["checks"] if c.get("status") != "PASS"]
+                return {"status": x["status"], "not_pass": bad}
+            return {k: walk(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [walk(v) for v in x]
+        return _compact_num(x)
+
+    if not isinstance(out, dict):
+        return out
+    o = dict(out)
+    if name == "market_overview":
+        o["expiries"] = [{k: e.get(k) for k in ("expiry", "days", "forward", "atm_vol", "qa_status", "svi_status",
+                                                "svi_rmse_vol_pts")} | {"forward_check": (e.get("forward_check") or {})
+                                                                         .get("verdict")} for e in o.get("expiries", [])]
+        o["futures"] = [{k: f.get(k) for k in ("expiry", "last")} for f in o.get("futures", [])]
+        o["curve"] = {k: (o.get("curve") or {}).get(k) for k in ("label", "age_days")}
+    elif name == "recommend_strategies":
+        def slim(i):
+            j = {k: v for k, v in i.items() if k not in ("greeks", "market_view", "margin", "charges", "premium",
+                                                         "stress_loss_3sd", "family")}
+            j["chosen_view"] = {k: (i.get("chosen_view") or {}).get(k) for k in ("expected", "prob_profit", "es95")}
+            j["why_this_strategy"] = (i.get("why_this_strategy") or "")[:180]
+            if "reasons" in j:
+                j["reasons"] = j["reasons"][:2]
+            return j
+        o["recommended"] = [slim(i) for i in o.get("recommended", [])[:3]]
+        o["not_recommended"] = [slim(i) for i in o.get("not_recommended", [])[:2]]
+        o["views"] = {k: {kk: vv for kk, vv in v.items() if kk in ("mean", "p5", "p95")}
+                      for k, v in (o.get("views") or {}).items()}
+    elif name == "get_smile":
+        o["quotes"] = o.get("quotes", [])[::2]
+    elif name == "find_hedge":
+        o["hedges"] = o.get("hedges", [])[:2]
+    return walk(o)
+
+
+def _llm_json(name: str, out) -> str:
+    return json.dumps(for_llm(name, out), separators=(",", ":"), default=str)
+
+
 def _summary(name: str, out) -> str:
     """One line per tool result for the live step list."""
     if not isinstance(out, dict):
@@ -382,14 +437,21 @@ def ungrounded_numbers(answer: str, question: str, records: list["ToolRecord"]) 
 
 def agent_llm(role: str = "orchestrator"):
     """The configured LLM (LLM_PROVIDER ...); if none is set but GEMINI_API_KEY is, Gemini with model fallback."""
+    from .insights import FallbackLLM, insights_llm
+
     try:
-        return make_llm(get_setting, role)
+        primary = make_llm(get_setting, role)
     except LLMNotConfigured:
         if not get_setting("GEMINI_API_KEY", ""):
             raise
-        from .insights import insights_llm
-
         return insights_llm(get_setting)
+    if not get_setting("GEMINI_API_KEY", "") or getattr(primary, "provider", "") == "gemini":
+        return primary
+    # a small free tier (e.g. Groq: 8,000 tokens a minute) hands over to Gemini instead of waiting or failing
+    if hasattr(primary, "max_retries"):
+        primary.max_retries = 0
+    backup = insights_llm(get_setting)
+    return FallbackLLM([primary] + list(getattr(backup, "clients", [backup])))
 
 
 class OptionPricingAgent:
@@ -535,7 +597,8 @@ class OptionPricingAgent:
                     emit({"type": "tool_done", "name": tc.name, "input": dict(tc.arguments), "error": err,
                           "status": "FAIL" if err else (st_ or "OK"), "summary": _summary(tc.name, out)})
                     messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.name,
-                                     "content": json.dumps(out) if err is None else err, "is_error": err is not None})
+                                     "content": _llm_json(tc.name, out) if err is None else err,
+                                     "is_error": err is not None})
             else:
                 answer = "I could not finish within the step limit; please narrow the request."
             emit({"type": "validating"})
@@ -578,8 +641,10 @@ class OptionPricingAgent:
     def _validate(self, question: str, records: list[ToolRecord]) -> tuple[str, str]:
         if not records:
             return "No tool calls were made, so there is nothing to validate.", "PASS"
-        payload = {"question": question, "tool_calls": [asdict(r) for r in records]}
-        reply = self.validator_llm.chat(VALIDATOR_PROMPT, [{"role": "user", "content": json.dumps(payload, default=str)}],
+        payload = {"question": question, "tool_calls": [{"name": r.name, "input": r.input, "error": r.error,
+                                                          "output": for_llm(r.name, r.output)} for r in records]}
+        content = json.dumps(payload, separators=(",", ":"), default=str)
+        reply = self.validator_llm.chat(VALIDATOR_PROMPT, [{"role": "user", "content": content}],
                                         tools=None, max_tokens=4096)
         m = re.search(r"VERDICT:\s*\**\s*(PASS|WARN|FAIL)", reply.text, re.IGNORECASE)
         verdict = m.group(1).upper() if m else "WARN"  # an unparseable review is not a clean pass

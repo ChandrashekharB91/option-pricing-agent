@@ -197,3 +197,21 @@ def test_gemini_list_shaped_error_is_readable():
     llm = OpenAICompatibleLLM("gemini", "https://example.invalid", "m", "k", session=Session(), max_retries=0)
     with pytest.raises(LLMError, match="API key not valid"):
         llm.chat("s", [{"role": "user", "content": "hi"}])
+
+
+def test_gemini_thought_signature_round_trip():
+    """Gemini 3 returns a signature with each tool call; it must go back unchanged, and calls made by another
+    model get the documented placeholder so a mid-run switch to Gemini is accepted."""
+    from optlib_app.llm import GEMINI_SKIP_SIGNATURE, OpenAICompatibleLLM, ToolCall
+
+    sig = {"google": {"thought_signature": "abc123"}}
+    msgs = [{"role": "user", "content": "q"},
+            {"role": "assistant", "content": "", "tool_calls": [ToolCall("1", "market_overview", {}, None, sig),
+                                                                ToolCall("2", "news", {})]},
+            {"role": "tool", "tool_call_id": "1", "name": "market_overview", "content": "{}"}]
+    out = OpenAICompatibleLLM.to_provider("s", msgs, gemini=True)
+    calls = out[2]["tool_calls"]
+    assert calls[0]["extra_content"] == sig
+    assert calls[1]["extra_content"]["google"]["thought_signature"] == GEMINI_SKIP_SIGNATURE
+    plain = OpenAICompatibleLLM.to_provider("s", msgs)  # other providers: nothing added
+    assert "extra_content" not in plain[2]["tool_calls"][1]

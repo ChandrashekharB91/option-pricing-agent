@@ -178,3 +178,31 @@ def test_agent_stream_endpoint(client, monkeypatch):
     lines = [json.loads(x) for x in r.text.splitlines() if x]
     assert lines[0]["type"] == "thinking" and lines[-1]["type"] == "reply"
     assert lines[-1]["reply"]["answer"].startswith("Nothing")
+
+
+def test_model_sees_compact_results_and_large_requests_fall_back(svc):
+    from optlib_app.agent import for_llm
+    from optlib_app.insights import FallbackLLM, _RESTING
+    from optlib_app.llm import LLMError, LLMReply
+
+    out = svc.price("NIFTY", svc.expiries("NIFTY")[0], 22500, "call", 1)
+    v = for_llm("price_option", {"validation": out["validation"], "x": 1.234567891})
+    assert set(v["validation"]) == {"status", "not_pass"} and v["x"] == 1.23457
+    assert all("PASS" not in s.split(":")[0] for s in v["validation"]["not_pass"])
+
+    class TooBig:
+        model = "groq-x"
+
+        def chat(self, *a, **k):
+            raise LLMError("groq HTTP 413: Request too large for model on tokens per minute (TPM)")
+
+    class Gem:
+        model = "gemini-x"
+
+        def chat(self, *a, **k):
+            return LLMReply("ok")
+
+    f = FallbackLLM([TooBig(), Gem()])
+    assert f.chat("s", []).text == "ok" and f.model == "gemini-x"
+    assert _RESTING.get("groq-x", 0) > 0  # skipped for a minute, then tried again
+    _RESTING.clear()

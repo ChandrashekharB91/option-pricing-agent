@@ -44,6 +44,9 @@ DEFAULT_MODELS = {  # only where the provider's own docs name a tool-capable mod
 KEY_NOT_NEEDED = {"ollama"}
 
 
+GEMINI_SKIP_SIGNATURE = "skip_thought_signature_validator"
+
+
 class LLMError(Exception):
     """The LLM API failed (network, auth, rate limit, bad response)."""
 
@@ -58,6 +61,7 @@ class ToolCall:
     name: str
     arguments: dict
     parse_error: Optional[str] = None  # the model sent arguments that are not valid JSON
+    extra: Optional[dict] = None  # provider data to send back unchanged (Gemini 3: the thought signature)
 
 
 @dataclass
@@ -139,7 +143,7 @@ class OpenAICompatibleLLM:
         return f"OpenAICompatibleLLM(provider={self.provider!r}, model={self.model!r}, base_url={self.base_url!r})"
 
     @staticmethod
-    def to_provider(system: str, messages: list[dict]) -> list[dict]:
+    def to_provider(system: str, messages: list[dict], gemini: bool = False) -> list[dict]:
         out = [{"role": "system", "content": system}]
         for m in messages:
             if m["role"] == "user":
@@ -147,9 +151,16 @@ class OpenAICompatibleLLM:
             elif m["role"] == "assistant":
                 msg = {"role": "assistant", "content": m.get("content") or ""}
                 if m.get("tool_calls"):
-                    msg["tool_calls"] = [{"id": t.id, "type": "function",
-                                          "function": {"name": t.name, "arguments": json.dumps(t.arguments)}}
-                                         for t in m["tool_calls"]]
+                    msg["tool_calls"] = []
+                    for t in m["tool_calls"]:
+                        call = {"id": t.id, "type": "function",
+                                "function": {"name": t.name, "arguments": json.dumps(t.arguments)}}
+                        extra = getattr(t, "extra", None)
+                        if extra:
+                            call["extra_content"] = extra
+                        elif gemini:  # a call made by another model: Gemini 3 accepts this documented placeholder
+                            call["extra_content"] = {"google": {"thought_signature": GEMINI_SKIP_SIGNATURE}}
+                        msg["tool_calls"].append(call)
                 out.append(msg)
             elif m["role"] == "tool":
                 out.append({"role": "tool", "tool_call_id": m["tool_call_id"], "name": m.get("name", ""),
@@ -175,7 +186,8 @@ class OpenAICompatibleLLM:
         return sorted(str(m.get("id") or m.get("name")) for m in items if isinstance(m, dict))
 
     def chat(self, system, messages, tools=None, max_tokens=2048) -> LLMReply:
-        body = {"model": self.model, "messages": self.to_provider(system, messages), "max_tokens": max_tokens}
+        body = {"model": self.model, "messages": self.to_provider(system, messages, self.provider == "gemini"),
+                "max_tokens": max_tokens}
         if tools:
             body["tools"] = self.tools_to_provider(tools)
         headers = {"Content-Type": "application/json"}
@@ -223,7 +235,8 @@ class OpenAICompatibleLLM:
                 args, err = (raw if isinstance(raw, dict) else json.loads(raw)), None
             except json.JSONDecodeError as exc:
                 args, err = {}, f"tool arguments are not valid JSON: {exc}"
-            calls.append(ToolCall(tc.get("id") or f"call_{i}", fn.get("name", ""), args, err))
+            calls.append(ToolCall(tc.get("id") or f"call_{i}", fn.get("name", ""), args, err,
+                                  tc.get("extra_content") or None))
         return LLMReply((msg.get("content") or "").strip(), calls, choice.get("finish_reason") or "")
 
 

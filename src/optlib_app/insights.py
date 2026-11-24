@@ -50,7 +50,7 @@ def insights_llm(get: Callable[[str, str], str]):
             gem = {"LLM_PROVIDER": "gemini", "LLM_API_KEY": get("GEMINI_API_KEY", ""), "LLM_MODEL": m,
                    "LLM_BASE_URL": ""}
             c = make_llm(lambda k, d="", gem=gem: gem.get(k, d) if k in gem else get(k, d), "insights")
-            c.timeout, c.max_retries = 40.0, 1  # a slow model hands over quickly instead of holding the page
+            c.timeout, c.max_retries = 60.0, 1  # a slow model hands over quickly instead of holding the page
             clients.append(c)
         return FallbackLLM(clients)
     return make_llm(get, "insights")
@@ -58,7 +58,8 @@ def insights_llm(get: Callable[[str, str], str]):
 
 # when a Gemini model is busy (503), rate-limited (429) or unavailable (404), the next one is tried
 GEMINI_FALLBACKS = [DEFAULT_MODELS["gemini"], "gemini-3.6-flash", "gemini-3.5-flash-lite"]
-_BUSY = ("HTTP 503", "HTTP 429", "HTTP 404", "HTTP 500", "HTTP 502", "HTTP 504", "cannot reach")
+_BUSY = ("HTTP 503", "HTTP 429", "HTTP 413", "HTTP 404", "HTTP 500", "HTTP 502", "HTTP 504", "cannot reach",
+         "rate limit", "too large")
 
 
 class FallbackLLM:
@@ -101,8 +102,8 @@ def _rest_seconds(err: str) -> float:
     if m and any(m.groups()):
         h, mi, se = (float(x) if x else 0.0 for x in m.groups())
         return min(h * 3600 + mi * 60 + se, 24 * 3600)
-    if "HTTP 429" in err:
-        return 120.0
+    if "HTTP 429" in err or "HTTP 413" in err:
+        return 60.0  # per-minute limits reset quickly
     return 300.0
 
 
