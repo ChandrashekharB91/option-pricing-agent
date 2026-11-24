@@ -7,7 +7,7 @@
 #
 # Repository settings > Secrets and variables > Actions:
 #   secrets:   UPSTOX_ANALYTICS_TOKEN, SMTP_PASSWORD (Gmail app password), CLOUDFLARE_API_TOKEN (D1 edit)
-#   variables: D1_ACCOUNT_ID, SMTP_USER, MAIL_FROM (optional), FEED_PUBLIC_URL (the app's address, for email links),
+#   variables: D1_ACCOUNT_ID, SMTP_USER, MAIL_FROM (optional), MAIL_FROM_NAME (sender name, optional), FEED_PUBLIC_URL (the app's address, for email links),
 #              FEED_SEND_TIME (optional, HH:MM IST)
 # Run it by hand: Actions > Daily options email > Run workflow (optionally with a test address).
 # If a run fails, GitHub emails the repository owner.
@@ -44,6 +44,7 @@ jobs:
       SMTP_USER: ${{ vars.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       MAIL_FROM: ${{ vars.MAIL_FROM || vars.SMTP_USER }}
+      MAIL_FROM_NAME: ${{ vars.MAIL_FROM_NAME || 'NIFTY Options Daily' }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       D1_ACCOUNT_ID: ${{ vars.D1_ACCOUNT_ID }}
       D1_DATABASE_NAME: option-pricing-agent
