@@ -404,7 +404,7 @@ class StrategyPdfRequest(BaseModel):
 
 _daily: dict = {}
 _daily_lock = threading.Lock()
-DAILY_TTL = 1800  # the AI note and the PDF are rebuilt at most every 30 minutes
+DAILY_TTL = 3600  # the AI note and the PDF are rebuilt at most once an hour (free-tier Gemini: ~20 calls a day per model)
 
 
 def daily_feed(feed, underlying: str = "NIFTY") -> dict:

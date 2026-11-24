@@ -197,7 +197,7 @@ The output is `reports/backtest_report.html` and `reports/backtest_summary.json`
   `GET /feed/pdf`, `POST /strategy/pdf`.
 
 API endpoints: `GET /stats/iv/{underlying}`, `GET /oi/{underlying}?expiry=`, `GET /news`,
-`GET /insights/note/{underlying}` (cached 30 minutes), `POST /strategy/from_text`.
+`GET /insights/note/{underlying}` (cached one hour), `POST /strategy/from_text`.
 
 ## Running in the cloud (no laptop needed)
 

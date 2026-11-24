@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from types import SimpleNamespace
 from typing import Callable, Optional
 
@@ -48,7 +49,9 @@ def insights_llm(get: Callable[[str, str], str]):
         for m in models:
             gem = {"LLM_PROVIDER": "gemini", "LLM_API_KEY": get("GEMINI_API_KEY", ""), "LLM_MODEL": m,
                    "LLM_BASE_URL": ""}
-            clients.append(make_llm(lambda k, d="", gem=gem: gem.get(k, d) if k in gem else get(k, d), "insights"))
+            c = make_llm(lambda k, d="", gem=gem: gem.get(k, d) if k in gem else get(k, d), "insights")
+            c.timeout, c.max_retries = 40.0, 1  # a slow model hands over quickly instead of holding the page
+            clients.append(c)
         return FallbackLLM(clients)
     return make_llm(get, "insights")
 
@@ -72,7 +75,9 @@ class FallbackLLM:
 
     def chat(self, system, messages, tools=None, max_tokens=2048):
         last = None
-        for c in self.clients:
+        now = time.time()
+        ready = [c for c in self.clients if _RESTING.get(getattr(c, "model", ""), 0) <= now] or self.clients
+        for c in ready:
             try:
                 reply = c.chat(system, messages, tools=tools, max_tokens=max_tokens)
                 self.model = getattr(c, "model", self.model)
@@ -81,8 +86,24 @@ class FallbackLLM:
                 last = exc
                 if not any(b in str(exc) for b in _BUSY):
                     raise
-                log.warning("Gemini %s unavailable (%s); trying the next model", getattr(c, "model", "?"), exc)
+                _RESTING[getattr(c, "model", "")] = time.time() + _rest_seconds(str(exc))
+                log.warning("Gemini %s unavailable (%s); trying the next model", getattr(c, "model", "?"),
+                            str(exc)[:160])
         raise last
+
+
+_RESTING: dict[str, float] = {}  # model -> time it may be tried again (daily quota used up, busy, slow)
+
+
+def _rest_seconds(err: str) -> float:
+    """How long to skip a model: until its quota resets when Google says so, else a few minutes."""
+    m = re.search(r"retry in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", err)
+    if m and any(m.groups()):
+        h, mi, se = (float(x) if x else 0.0 for x in m.groups())
+        return min(h * 3600 + mi * 60 + se, 24 * 3600)
+    if "HTTP 429" in err:
+        return 120.0
+    return 300.0
 
 
 def facts(feed: dict) -> dict:
