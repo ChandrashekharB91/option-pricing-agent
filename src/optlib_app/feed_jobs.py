@@ -31,6 +31,7 @@ log = logging.getLogger("uvicorn.error")  # shows in the API console
 class FeedJobs:
     def __init__(self, svc, feed_dir: Path = FEED_DIR, get=get_setting):
         self.svc = svc
+        self.get = get
         self.dir = Path(feed_dir)
         # Cloudflare D1 when CLOUDFLARE_API_TOKEN is set (shared by the app and the scheduled cloud job),
         # otherwise a local SQLite file
@@ -142,8 +143,25 @@ class FeedJobs:
         return self.store.unsubscribe(token)
 
     # the feed ---------------------------------------------------------------
-    def build(self, underlying: str = "NIFTY") -> dict:
-        return build_feed(self.svc, underlying, previous_values=self.store.previous_history)
+    def build(self, underlying: str = "NIFTY", extras: bool = True) -> dict:
+        """The day's numbers; with extras, also market headlines and the AI-written note (both optional:
+        a failure in either leaves the email unchanged)."""
+        feed = build_feed(self.svc, underlying, previous_values=self.store.previous_history)
+        feed["news"], feed["ai_note"] = [], None
+        if extras:
+            try:
+                from .news import headlines
+
+                feed["news"] = headlines(8, get=self.get)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("feed: news unavailable: %s", exc)
+            try:
+                from .insights import market_note
+
+                feed["ai_note"] = market_note(feed, feed["news"], get=self.get)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("feed: AI note unavailable: %s", exc)
+        return feed
 
     def preview_html(self, feed: Optional[dict] = None, name: str = "") -> str:
         feed = feed or self.build()

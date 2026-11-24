@@ -84,6 +84,15 @@ h1, h2, h3, h4 {{ letter-spacing: -0.01em; }}
 .opa-card h4 {{ margin: 0 0 6px; font-size: 1rem; }}
 .opa-muted {{ color: var(--muted); font-size: 0.86rem; line-height: 1.55; }}
 .opa-brand {{ font-weight: 800; font-size: 1.15rem; letter-spacing: -0.01em; }}
+.opa-note {{ background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+        border-radius: 12px; padding: 16px 18px; box-shadow: var(--shadow); font-size: 0.98rem; line-height: 1.65; }}
+.opa-note .meta {{ color: var(--muted); font-size: 0.78rem; margin-top: 8px; }}
+.opa-kicker {{ font-size: 0.72rem; letter-spacing: .12em; text-transform: uppercase; color: var(--accent);
+        font-weight: 800; margin-bottom: 6px; }}
+.opa-news {{ padding: 10px 2px; border-bottom: 1px solid var(--line); }}
+.opa-news a {{ color: var(--ink); text-decoration: none; font-weight: 600; line-height: 1.45; }}
+.opa-news a:hover {{ color: var(--accent); }}
+.opa-news .src {{ color: var(--muted); font-size: 0.8rem; margin-top: 2px; }}
 .opa-brand span {{ color: var(--accent); }}
 </style>""", unsafe_allow_html=True)
 
@@ -102,3 +111,18 @@ def hero(kicker: str, title: str, subtitle: str, chips: list[str]) -> None:
 def card(title: str, body_html: str) -> None:
     st.markdown(f'<div class="opa-card"><h4>{html.escape(title)}</h4><div class="opa-muted">{body_html}</div></div>',
                 unsafe_allow_html=True)
+
+
+def news_list(items: list[dict], ago=None) -> None:
+    """Headlines as links (source and age underneath)."""
+    rows = []
+    for n in items:
+        when = f" · {ago(n.get('published'))}" if ago and n.get("published") else ""
+        rows.append(f'<div class="opa-news"><a href="{html.escape(n["link"])}" target="_blank" rel="noopener">'
+                    f'{html.escape(n["title"])}</a><div class="src">{html.escape(n["source"])}{when}</div></div>')
+    st.markdown("".join(rows), unsafe_allow_html=True)
+
+
+def note_card(text: str, meta: str) -> None:
+    st.markdown(f'<div class="opa-note"><div class="opa-kicker">AI market note</div>{html.escape(text)}'
+                f'<div class="meta">{html.escape(meta)}</div></div>', unsafe_allow_html=True)

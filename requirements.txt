@@ -1,3 +1,5 @@
 # Streamlit Community Cloud installs from this file. Editable (-e), so the app runs from the repository
 # folder and finds config/ and data/ there.
 -e .[app]
+# listed again so the hosted app reinstalls when the PDF export is added
+reportlab>=4

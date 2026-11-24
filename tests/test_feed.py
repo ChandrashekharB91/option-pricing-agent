@@ -16,6 +16,18 @@ from optlib_app.service import PricingService
 from optlib_app.subscribers import SubscriberStore, SubscriptionError
 
 
+HEADLINES = [{"title": "Sensex, Nifty slip as FIIs sell; India VIX rises", "link": "https://example.com/a",
+              "source": "Example News", "published": "2026-10-29T09:00:00+00:00", "relevance": 9}]
+
+
+@pytest.fixture(autouse=True)
+def _no_network_news(monkeypatch):
+    """Tests never call the real news sites."""
+    from optlib_app import news
+
+    monkeypatch.setattr(news, "headlines", lambda *a, **k: list(HEADLINES))
+
+
 @pytest.fixture(scope="module")
 def svc():
     s = Settings()

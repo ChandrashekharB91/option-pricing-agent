@@ -78,9 +78,9 @@ def _start_embedded_api(url: str, client: PricingClient) -> None:
             time.sleep(0.5)
 
 
-def show(fig: go.Figure, where=st) -> None:
+def show(fig: go.Figure, where=st, key: str | None = None) -> None:
     """Every chart goes through here so it follows the light/dark theme."""
-    where.plotly_chart(charts.themed(fig, DARK), width="stretch", theme=None)
+    where.plotly_chart(charts.themed(fig, DARK), width="stretch", theme=None, key=key)
 
 
 def badge(status: str) -> str:
@@ -156,9 +156,212 @@ ui.hero(f"{underlying} options desk", f"{ov['spot']:,.2f}",
          f"{ov['curve']['age_days']} days old"])
 
 dash_auth._flash(toast=True)  # messages from email links and account changes, as pop-ups
-tab_market, tab_price, tab_book, tab_risk, tab_strat, tab_agent, tab_feed, tab_acct = st.tabs(
-    ["Market & smile", "Pricer", "Book risk", "Risk (VaR, stress, P&L)", "Strategy lab", "Ask the agent",
-     "Daily email", "My account"])
+(tab_over, tab_market, tab_oi, tab_price, tab_book, tab_risk, tab_strat, tab_news, tab_agent, tab_feed,
+ tab_acct) = st.tabs(["Overview", "Market & smile", "Open interest", "Pricer", "Book risk", "Risk (VaR, stress, P&L)",
+                      "Strategy lab", "News", "Ask the agent", "Daily email", "My account"])
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _news(limit: int = 20):
+    return client.news(limit)
+
+
+def oi_chart(o: dict, title: str) -> go.Figure:
+    """Calls to the right, puts to the left of each strike (lakh units), with the forward and max pain marked."""
+    rows = pd.DataFrame(o["rows"])
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=rows.strike, x=rows.call_oi / 1e5, orientation="h", name="call OI", marker_color=CALL,
+                         hovertemplate="%{y:,.0f} call: %{x:,.1f} L<extra></extra>"))
+    fig.add_trace(go.Bar(y=rows.strike, x=-rows.put_oi / 1e5, orientation="h", name="put OI", marker_color=PUT,
+                         customdata=rows.put_oi / 1e5, hovertemplate="%{y:,.0f} put: %{customdata:,.1f} L<extra></extra>"))
+    fig.add_hline(y=o["forward"], line=dict(color=GREY, dash="dash"), annotation_text=f"forward {o['forward']:,.0f}",
+                  annotation_font_color=GREY, annotation_position="top right")
+    if o.get("max_pain"):
+        fig.add_hline(y=o["max_pain"], line=dict(color=ACCENT, dash="dot"),
+                      annotation_text=f"max pain {o['max_pain']:,.0f}", annotation_font_color=ACCENT,
+                      annotation_position="bottom left")
+    fig.update_layout(title=title, barmode="relative", bargap=0.15, height=520, xaxis_title="open interest (lakh units)"
+                      " · puts left, calls right", yaxis_title="strike", margin=dict(t=60, b=40),
+                      legend=dict(orientation="h", x=1, xanchor="right", y=1.08))
+    fig.update_xaxes(tickvals=None, tickformat=",.0f")
+    return fig
+
+
+# ------------------------------------------------------------------ overview
+with tab_over:
+    try:
+        ivs = client.iv_stats(underlying)
+    except PricingAPIError as exc:
+        ivs = {"available": False, "reason": exc.detail}
+    try:
+        oi0 = client.open_interest(underlying)
+    except PricingAPIError:
+        oi0 = None
+    e_w = next((e for e in expiry_rows if e["days"] >= 0.5), expiry_rows[0])
+    move = e_w["forward"] * e_w["atm_vol"] * (max(e_w["days"], 0.01) / 365) ** 0.5
+    k = st.columns(6)
+    k[0].metric(f"{underlying} spot", f"{ov['spot']:,.2f}")
+    if ivs.get("available"):
+        k[1].metric("India VIX", f"{ivs['vix'] * 100:.2f}",
+                    f"{ivs['change_1d'] * 100:+.2f}" if ivs.get("change_1d") is not None else None,
+                    delta_color="inverse")
+        k[2].metric("VIX rank (1y)", f"{ivs['rank']:.0%}", ivs["label"], delta_color="off", delta_arrow="off",
+                    help=f"Where today's VIX sits in its 1-year range ({ivs['low']:.2%} to {ivs['high']:.2%}); "
+                         f"percentile {ivs['percentile']:.0%} of days were lower.")
+    else:
+        k[1].metric("India VIX", "n/a")
+        k[2].metric("VIX rank (1y)", "n/a")
+    k[3].metric(f"ATM IV · {e_w['expiry'][5:]}", f"{e_w['atm_vol']:.2%}", f"{e_w['days']:.1f} days",
+                delta_color="off", delta_arrow="off")
+    k[4].metric("Expected move", f"±{move:,.0f}", f"±{move / e_w['forward']:.2%} by expiry", delta_color="off",
+                delta_arrow="off")
+    if oi0:
+        k[5].metric("Put/call OI", f"{oi0['pcr']:.2f}" if oi0.get("pcr") else "n/a",
+                    f"max pain {oi0['max_pain']:,.0f}" if oi0.get("max_pain") else None, delta_color="off",
+                    delta_arrow="off")
+    else:
+        k[5].metric("Put/call OI", "n/a")
+
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        if ivs.get("available"):
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=ivs["dates"], y=[v * 100 for v in ivs["series"]], name="India VIX",
+                                     line=dict(color=CALL, width=2), fill="tozeroy",
+                                     fillcolor="rgba(129,140,248,0.10)" if DARK else "rgba(79,70,229,0.07)"))
+            fig.add_hline(y=ivs["mean"] * 100, line=dict(color=GREY, dash="dot"),
+                          annotation_text=f"1-year mean {ivs['mean'] * 100:.1f}", annotation_font_color=GREY)
+            fig.add_trace(go.Scatter(x=[ivs["dates"][-1]], y=[e_w["atm_vol"] * 100], mode="markers",
+                                     name=f"weekly ATM IV {e_w['atm_vol']:.1%}",
+                                     marker=dict(color=PUT, size=11, symbol="diamond")))
+            fig.update_layout(title="India VIX, last 12 months, with today's weekly ATM implied vol", height=360,
+                              yaxis_title="vol (%)", margin=dict(t=60, b=30),
+                              legend=dict(orientation="h", x=1, xanchor="right", y=1.1))
+            lo_y = min(min(ivs["series"]), e_w["atm_vol"]) * 100
+            fig.update_yaxes(range=[lo_y * 0.85, max(max(ivs["series"]), e_w["atm_vol"]) * 100 * 1.05])
+            show(fig)
+        else:
+            st.info(f"India VIX history unavailable: {ivs.get('reason', '')}")
+        if oi0 and oi0.get("rows"):
+            show(oi_chart(oi0, f"Open interest by strike · {oi0['expiry']}"), key="oi_overview")
+    with right:
+        note_box = st.empty()
+        st.markdown("")
+        st.markdown('<div class="opa-kicker">Market news</div>', unsafe_allow_html=True)
+        try:
+            from optlib_app.news import ago
+
+            items = _news(20)
+            if items:
+                ui.news_list(items[:7], ago)
+                st.caption("Top headlines from Economic Times, Mint, Business Standard and Google News, ranked for "
+                           "relevance to index options. More in the **News** tab.")
+            else:
+                st.caption("No headlines right now.")
+        except PricingAPIError as exc:
+            st.caption(f"News unavailable: {exc.detail}")
+        with note_box.container():
+            try:
+                with st.spinner("Writing today's market note…"):
+                    nt = client.market_note(underlying)
+            except PricingAPIError as exc:
+                nt = {"note": None, "error": exc.detail}
+            if nt.get("note"):
+                ui.note_card(nt["note"]["text"], f"Written by AI ({nt['note'].get('model') or 'model'}) from today's "
+                             "numbers; every number checked against the data. Description, not advice.")
+            elif IS_ADMIN:
+                st.info("AI market note: add GEMINI_API_KEY (from aistudio.google.com) to the app's secrets to turn "
+                        "it on." + (f" ({nt['error']})" if nt.get("error") else ""))
+        st.write("")
+        if st.button("Prepare today's report (PDF)", width="stretch"):
+            try:
+                with st.spinner("Building the PDF…"):
+                    st.session_state["daily_pdf"] = client.daily_pdf(underlying)
+            except PricingAPIError as exc:
+                show_error(exc)
+        if st.session_state.get("daily_pdf"):
+            st.download_button("⬇ Download today's report", st.session_state["daily_pdf"],
+                               file_name=f"{underlying}-options-daily.pdf", mime="application/pdf", width="stretch",
+                               type="primary")
+    st.caption("Market analytics for education and research. Not investment advice.")
+
+# ------------------------------------------------------------------ open interest
+with tab_oi:
+    o1, o2 = st.columns([1, 3])
+    oi_exp = o1.selectbox("Expiry", [e for e in expiry_ids], key="oi_exp",
+                          index=next((i for i, e in enumerate(expiry_rows) if e["days"] >= 0.5), 0))
+    try:
+        oo = client.open_interest(underlying, oi_exp)
+    except PricingAPIError as exc:
+        show_error(exc)
+        oo = None
+    if oo:
+        m = st.columns(5)
+        m[0].metric("Put/call ratio (OI)", f"{oo['pcr']:.2f}" if oo.get("pcr") else "n/a",
+                    f"{oo['pcr'] - oo['pcr_prev']:+.2f} vs previous" if oo.get("pcr") and oo.get("pcr_prev") else None,
+                    delta_color="off")
+        m[1].metric("Call OI", f"{oo['call_oi'] / 1e7:,.2f} cr",
+                    f"{oo['call_change'] / 1e7:+,.2f} cr" if oo.get("call_change") is not None else None,
+                    delta_color="off")
+        m[2].metric("Put OI", f"{oo['put_oi'] / 1e7:,.2f} cr",
+                    f"{oo['put_change'] / 1e7:+,.2f} cr" if oo.get("put_change") is not None else None,
+                    delta_color="off")
+        m[3].metric("Max pain", f"{oo['max_pain']:,.0f}" if oo.get("max_pain") else "n/a",
+                    f"{oo['max_pain'] - oo['forward']:+,.0f} vs forward" if oo.get("max_pain") else None,
+                    delta_color="off", delta_arrow="off",
+                    help="The settlement level at which option buyers would collect the least in total.")
+        m[4].metric("1-sd move", f"±{oo['expected_move']:,.0f}", "strikes shown: ±4 sd", delta_color="off",
+                    delta_arrow="off")
+        a, b = st.columns([3, 2], gap="large")
+        with a:
+            show(oi_chart(oo, f"Open interest by strike · {oo['expiry']}"), key="oi_tab")
+        with b:
+            rows = pd.DataFrame(oo["rows"])
+            if rows[["call_change", "put_change"]].notna().any().any():
+                ch = go.Figure()
+                ch.add_trace(go.Bar(x=rows.strike, y=rows.call_change.fillna(0) / 1e5, name="call OI change",
+                                    marker_color=CALL))
+                ch.add_trace(go.Bar(x=rows.strike, y=rows.put_change.fillna(0) / 1e5, name="put OI change",
+                                    marker_color=PUT))
+                ch.update_layout(title="Change in open interest on the day", height=300, barmode="group",
+                                 yaxis_title="lakh units", margin=dict(t=60, b=30),
+                                 legend=dict(orientation="h", x=1, xanchor="right", y=1.12))
+                show(ch)
+            top = pd.DataFrame({"call strike": [x["strike"] for x in oo["top_calls"]],
+                                "call OI (L)": [x["oi"] / 1e5 for x in oo["top_calls"]],
+                                "put strike": [x["strike"] for x in oo["top_puts"]],
+                                "put OI (L)": [x["oi"] / 1e5 for x in oo["top_puts"]]})
+            st.markdown("**Largest open interest**")
+            st.dataframe(top.style.format({"call strike": "{:,.0f}", "put strike": "{:,.0f}", "call OI (L)": "{:,.1f}",
+                                           "put OI (L)": "{:,.1f}"}), hide_index=True, width="stretch")
+        st.caption("Open interest shows where positions are held, in lakh units (1 L = 100,000). It is not a level the "
+                   "index must respect. Change is against the previous session's close.")
+
+# ------------------------------------------------------------------ news
+with tab_news:
+    st.markdown("#### Market news")
+    st.caption("Headlines from the publishers' public feeds, ranked for relevance to index options (NIFTY, Sensex, "
+               "RBI, FII flows, volatility, F&O) and recency. Links open the publisher's site. Refreshed every 10 "
+               "minutes.")
+    try:
+        from optlib_app.news import ago
+
+        items = _news(30)
+    except PricingAPIError as exc:
+        items = []
+        show_error(exc)
+    if items:
+        q = st.text_input("Filter", placeholder="e.g. RBI, Bank Nifty, crude", key="news_q")
+        shown = [n for n in items if not q or q.lower() in n["title"].lower()]
+        c1, c2 = st.columns(2, gap="large")
+        with c1:
+            ui.news_list(shown[::2], ago)
+        with c2:
+            ui.news_list(shown[1::2], ago)
+        if not shown:
+            st.caption("No headline matches the filter.")
+    else:
+        st.info("No headlines available right now.")
 
 # ------------------------------------------------------------------ market
 with tab_market:
@@ -465,6 +668,68 @@ with tab_strat:
     except PricingAPIError as exc:
         show_error(exc)
         st.stop()
+    with st.container(border=True):
+        st.markdown('<div class="opa-kicker">Describe your idea</div>', unsafe_allow_html=True)
+        st.caption("Write it in plain English: capital, where you think the index goes (a level, a % move or a "
+                   "range), by when, and how much risk you accept. The sentence sets the parameters, and everything "
+                   "assumed is listed with the result. Or skip this and set the parameters below.")
+        examples = ["I have 2 lakh and expect NIFTY to reach 24,500 by next Friday, low risk",
+                    "NIFTY will stay between 23,800 and 24,400 till expiry, capital 3L, high probability",
+                    "Bearish: NIFTY may fall 2% this week, ₹50,000, no naked selling",
+                    "Expect a big move either way after the RBI policy, 1 lakh"]
+        ex = st.selectbox("Examples", ["(write your own)"] + examples, key="intent_ex")
+        text = st.text_area("Your idea", value="" if ex.startswith("(") else ex, height=90, key="intent_text",
+                            placeholder=examples[0])
+        if st.button("Find strategies for this idea", type="primary", key="intent_go"):
+            try:
+                with st.spinner("Reading the idea and pricing every strategy…"):
+                    st.session_state["intent"] = client.strategy_from_text(text, underlying)
+                st.session_state.pop("intent_pdf", None)
+            except PricingAPIError as exc:
+                show_error(exc)
+        res = st.session_state.get("intent")
+        if res:
+            it, rr = res["interpretation"], res["result"]
+            st.markdown("##### How the idea was read")
+            c = st.columns(6)
+            c[0].metric("Capital", f"₹{it['capital']:,.0f}")
+            c[1].metric("Direction", {"up": "Up", "down": "Down", "neutral": "Sideways", "volatile": "Big move",
+                                      "none": "No view"}.get(it["direction"], it["direction"]))
+            c[2].metric("Target" if not it.get("range") else "Range",
+                        (f"{it['range'][0]:,.0f}–{it['range'][1]:,.0f}" if it.get("range")
+                         else f"{it['target']:,.0f}" if it.get("target") else "market view"))
+            c[3].metric("Horizon", pd.Timestamp(it["horizon"]).strftime("%d %b"), f"expiry {it['expiry'][5:]}",
+                        delta_color="off", delta_arrow="off")
+            c[4].metric("Risk", it["risk"].capitalize(), f"loss ≤ {rr['risk_budget']:.0%}",
+                        delta_color="off", delta_arrow="off")
+            c[5].metric("Rank by", {"risk_adjusted": "Reward/risk", "probability": "Probability",
+                                    "expected_return": "Return"}[it["objective"]])
+            if res["assumptions"]:
+                st.markdown("\n".join(f"- {a}" for a in res["assumptions"]))
+            st.caption(f"Read by: {it['read_by']}. Numbers come only from your sentence or the market data.")
+            src_i = rr["view"]["source"]
+            if rr["ideas"]:
+                st.markdown("##### Ideas")
+                st.dataframe(idea_rows(rr["ideas"], src_i).style.format(IDEA_FORMAT), hide_index=True,
+                             width="stretch", column_config=IDEA_COLUMNS)
+                pick_i = st.selectbox("Inspect", range(len(rr["ideas"])), key="intent_pick",
+                                      format_func=lambda k: rr["ideas"][k]["strategy"]["label"])
+                idea_i = rr["ideas"][pick_i]
+                st.markdown(f"**{idea_i['strategy']['label']}**. {idea_i['why']}")
+                show_strategy(idea_i, src_i, rr["views"][src_i])
+                pdf_ctx = {"text": res["text"], "assumptions": res["assumptions"], "spot": it["spot"],
+                           "underlying": underlying, "view_source": src_i}
+                if st.button("Prepare PDF of this strategy", key="intent_pdf_btn"):
+                    st.session_state["intent_pdf"] = client.strategy_pdf(idea_i, pdf_ctx)
+                if st.session_state.get("intent_pdf"):
+                    st.download_button("⬇ Download strategy PDF", st.session_state["intent_pdf"],
+                                       file_name="strategy.pdf", mime="application/pdf", key="intent_pdf_dl")
+            else:
+                st.warning("No strategy fits this idea within the capital and risk limit. Try more capital, a "
+                           "higher risk level or a later date.")
+            st.caption(rr["disclaimer"])
+
+    st.markdown('<div class="opa-kicker">Or set the parameters</div>', unsafe_allow_html=True)
     exp_row = expiry_rows[0]
     st.caption("Enter the capital and your view; the engine prices every strategy at the bid/ask you would pay, "
                "adds all charges and an estimated margin, sizes it to your capital, and projects the P&L.")
@@ -537,6 +802,12 @@ with tab_strat:
                 if idea.get("reasons"):
                     st.error("Not recommended: " + "; ".join(idea["reasons"]) + ".")
                 show_strategy(idea, src, vs)
+                if st.button("Prepare PDF of this strategy", key="rec_pdf_btn"):
+                    st.session_state["rec_pdf"] = client.strategy_pdf(idea, {"underlying": underlying,
+                                                                            "spot": ov["spot"], "view_source": src})
+                if st.session_state.get("rec_pdf"):
+                    st.download_button("⬇ Download strategy PDF", st.session_state["rec_pdf"], file_name="strategy.pdf",
+                                       mime="application/pdf", key="rec_pdf_dl")
             if rec["blocked"]:
                 with st.expander("Strategies that do not fit this capital"):
                     st.dataframe(pd.DataFrame(rec["blocked"]).rename(columns={"min_capital": "cheapest needs (₹)"})

@@ -15,7 +15,11 @@ import io
 from dataclasses import dataclass, field
 from datetime import date, datetime
 
+from zoneinfo import ZoneInfo
+
 from .feed import DISCLAIMER
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 # palette (light); the <style> block below swaps these in dark mode
 INK, MUTED, LINE, BG, CARD, SOFT = "#0f172a", "#64748b", "#e2e8f0", "#f1f5f9", "#ffffff", "#f8fafc"
@@ -174,6 +178,13 @@ def _img(name: str, images: dict, mode: str, alt: str) -> str:
 
 # ------------------------------------------------------------------ the email
 
+def _news_time(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).astimezone(_IST).strftime("%d %b, %H:%M IST")
+    except (TypeError, ValueError):
+        return ""
+
+
 def subject(feed: dict) -> str:
     e0 = feed["expiries"][0]
     chg = f" {feed['change_pct']:+.2%}" if feed.get("change_pct") is not None else ""
@@ -211,6 +222,23 @@ def render(feed: dict, unsubscribe_url: str = "", images: str = "cid", recipient
     bullets = "".join(f'<li style="margin:0 0 8px;font-size:14px;line-height:1.55;color:{INK}" class="ink">{_e(b)}</li>'
                       for b in feed["highlights"])
     sec_high = _section("Today in brief", f'<ul style="margin:0;padding:0 0 0 18px">{bullets}</ul>')
+    note = feed.get("ai_note")
+    sec_ai = "" if not note else _section(
+        "AI market note",
+        f'<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:{SOFT};'
+        f'border:1px solid {LINE};border-left:3px solid {ACCENT};border-radius:8px" class="tile line"><tr>'
+        f'<td style="padding:14px 16px;font-size:14px;line-height:1.6;color:{INK}" class="ink">{_e(note["text"])}</td>'
+        f'</tr></table>',
+        f"Written by AI ({_e(note.get('model') or 'language model')}) from the numbers in this email; every number "
+        f"was checked against the data before sending. Description, not advice.")
+    news = feed.get("news") or []
+    sec_news = "" if not news else _section("Market news", "".join(
+        f'<div style="padding:8px 0;border-bottom:1px solid {LINE}" class="line">'
+        f'<a href="{_e(n["link"])}" style="color:{INK};text-decoration:none;font-size:14px;font-weight:600;'
+        f'line-height:1.45" class="ink">{_e(n["title"])}</a>'
+        f'<div style="font-size:12px;color:{MUTED};margin-top:2px" class="muted">{_e(n["source"])}'
+        f'{" · " + _e(_news_time(n.get("published"))) if n.get("published") else ""}</div></div>' for n in news[:6]),
+        "Headlines and links from the publishers' public feeds; selected for relevance to index options.")
 
     vol_rows = [[f"<b>{_d(e['expiry'])}</b>", f"{e['days']:.1f}", f"{e['forward']:,.0f}", f"{e['atm_vol']:.2%}",
                  _chg(ch["atm_vol"].get(e["expiry"]), "+.2f", 100), f"{e['rr25'] * 100:+.2f}",
@@ -235,6 +263,10 @@ def render(feed: dict, unsubscribe_url: str = "", images: str = "cid", recipient
           ["Realised vol, last 60 trading days", f"{feed['hist_rv60']:.2%}" if feed.get("hist_rv60") else "n/a"],
           ["Realised vol, EWMA (λ = 0.94)", f"{feed['hist_ewma']:.2%}" if feed.get("hist_ewma") else "n/a"],
           ["Implied minus 20-day realised", f"{feed['vrp'] * 100:+.2f} vol pts" if feed.get("vrp") is not None else "n/a"]]
+    ivr = feed.get("iv_rank") or {}
+    if ivr.get("available"):
+        rv += [["India VIX 1-year rank (0% = year's low, 100% = high)", f"{ivr['rank']:.0%} ({ivr['label']})"],
+               ["India VIX 1-year range", f"{ivr['low']:.2%} to {ivr['high']:.2%}"]]
     sec_rv = _section("Implied vs realised", _table(["Measure", "Value"], rv),
                       f"Realised vols are annualised close-to-close, through the {_d(feed['hist_prev_date'])} close."
                       if feed.get("hist_prev_date") else "")
@@ -272,7 +304,9 @@ def render(feed: dict, unsubscribe_url: str = "", images: str = "cid", recipient
              f"{oi['pcr']:.2f}" if oi["pcr"] else "n/a"],
             ["Change on the day", _chg(oi["call_oi_change"] / 1e7 if oi["call_oi_change"] is not None else None, "+,.2f", suffix=" cr"),
              _chg(oi["put_oi_change"] / 1e7 if oi["put_oi_change"] is not None else None, "+,.2f", suffix=" cr"),
-             f"{oi['pcr_prev']:.2f} prev" if oi.get("pcr_prev") else ""]])
+             f"{oi['pcr_prev']:.2f} prev" if oi.get("pcr_prev") else ""]]
+            + ([["Max pain (settlement level paying option buyers least)", f"{oi['max_pain']:,.0f}", "", ""]]
+               if oi.get("max_pain") else []))
         sec_oi = _section(
             f"Open interest · {_d(e0['expiry'])} expiry",
             summary + '<div style="height:10px;line-height:10px">&nbsp;</div>'
@@ -365,7 +399,7 @@ def render(feed: dict, unsubscribe_url: str = "", images: str = "cid", recipient
   <tr><td colspan="2" style="padding-top:4px;font-size:13px;color:#cbd5e1">Snapshot {as_of.strftime('%H:%M')} IST · {_e(src)}</td></tr></table>
 </td></tr>
 <tr><td style="padding:18px 28px 0;font-size:14px;line-height:1.55;color:{INK}" class="pad ink">{hello} is today's summary of the {_e(feed['underlying'])} options market: volatility, skew, expected moves, reference prices and open interest. Information only, not advice.</td></tr>
-{kpis}{sec_high}{sec_vol}{sec_smile}{sec_rv}{sec_prob}{sec_ref}{sec_oi}{sec_fut}{sec_health}{glossary}{footer}
+{kpis}{sec_ai}{sec_high}{sec_vol}{sec_smile}{sec_rv}{sec_prob}{sec_ref}{sec_oi}{sec_fut}{sec_news}{sec_health}{glossary}{footer}
 </table></td></tr></table></body></html>"""
 
     return EmailMessageParts(subject=subject(feed), html=page, text=render_text(feed, unsubscribe_url), images=imgs)
@@ -375,6 +409,8 @@ def render_text(feed: dict, unsubscribe_url: str = "") -> str:
     e0 = feed["expiries"][0]
     lines = [f"{feed['underlying']} OPTIONS DAILY - {_d(feed['date'], '%d %b %Y')} (snapshot {feed['as_of'][11:16]} IST)",
              "Information only, not investment advice.", ""]
+    if feed.get("ai_note"):
+        lines += ["AI MARKET NOTE (AI-written from the numbers below, every number checked)", feed["ai_note"]["text"], ""]
     lines += [f"- {h}" for h in feed["highlights"]] + ["", "VOLATILITY BY EXPIRY"]
     lines.append(f"{'Expiry':<8}{'Days':>6}{'Forward':>10}{'ATM vol':>9}{'25d RR':>8}{'1-sd move':>11}")
     for e in feed["expiries"]:
@@ -385,6 +421,8 @@ def render_text(feed: dict, unsubscribe_url: str = "") -> str:
     lines += ["", "REFERENCE PRICES (per unit)"]
     lines += [f"  {r['label']:<14}{r['strike']:>8,.0f}  {r['price']:>8.2f}  vol {r['vol']:.2%}  delta {r['delta']:+.3f}  "
               f"[{r['status']}]" for r in feed["reference_options"]]
+    if feed.get("news"):
+        lines += ["", "MARKET NEWS"] + [f"  {n['title']} ({n['source']}) {n['link']}" for n in feed["news"][:6]]
     lines += ["", "NOT INVESTMENT ADVICE. " + DISCLAIMER, ""]
     lines.append(f"Unsubscribe: {unsubscribe_url}" if unsubscribe_url else "Reply UNSUBSCRIBE to stop these emails.")
     return "\n".join(lines)

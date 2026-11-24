@@ -8,12 +8,14 @@ PricingService, so a number is identical wherever it is shown.
 from __future__ import annotations
 
 import secrets
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import date
 from typing import Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from optlib.data.upstox import UpstoxError
@@ -387,6 +389,95 @@ def feed_send(req: SendRequest, feed=Depends(get_feed)):
         return _call(feed.send, req.to, req.force)
     except SubscriptionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------ desk statistics, news, AI note, PDFs
+class TextStrategyRequest(BaseModel):
+    text: str = Field(min_length=8, max_length=600, description="the idea in plain English")
+    underlying: str = "NIFTY"
+
+
+class StrategyPdfRequest(BaseModel):
+    idea: dict = Field(description="one idea as returned by /strategy/recommend, /strategy/project or /strategy/from_text")
+    context: dict = Field(default_factory=dict, description="optional: text, assumptions, spot, underlying, view_source")
+
+
+_daily: dict = {}
+_daily_lock = threading.Lock()
+DAILY_TTL = 1800  # the AI note and the PDF are rebuilt at most every 30 minutes
+
+
+def daily_feed(feed, underlying: str = "NIFTY") -> dict:
+    """The day's feed with news and the AI note, cached: the Overview tab and the PDF read the same one."""
+    with _daily_lock:
+        hit = _daily.get(underlying)
+        if hit and time.time() - hit[0] < DAILY_TTL and hit[2] is feed.svc:
+            return hit[1]
+    built = feed.build(underlying, extras=True)
+    with _daily_lock:
+        _daily[underlying] = (time.time(), built, feed.svc)
+    return built
+
+
+@app.get("/stats/iv/{underlying}")
+def stats_iv(underlying: str, svc: PricingService = Depends(get_service)):
+    return _call(svc.iv_stats, underlying)
+
+
+@app.get("/oi/{underlying}")
+def open_interest(underlying: str, expiry: Optional[date] = None, svc: PricingService = Depends(get_service)):
+    return _call(svc.open_interest, underlying, expiry)
+
+
+@app.get("/news")
+def news(limit: int = 12, feed=Depends(get_feed)):
+    from .news import headlines
+
+    return {"items": headlines(max(1, min(limit, 30)), get=feed.get)}
+
+
+@app.get("/insights/note/{underlying}")
+def insights_note(underlying: str, feed=Depends(get_feed)):
+    from .insights import insights_llm
+    from .llm import LLMNotConfigured
+
+    try:
+        insights_llm(feed.get)
+    except LLMNotConfigured:  # no model: skip building the day's feed just to say so
+        return {"note": None, "as_of": None, "date": None, "configured": False}
+    f = _call(daily_feed, feed, underlying)
+    return {"note": f.get("ai_note"), "as_of": f["as_of"], "date": f["date"]}
+
+
+@app.post("/strategy/from_text")
+def strategy_from_text(req: TextStrategyRequest, svc: PricingService = Depends(get_service), feed=Depends(get_feed)):
+    from .intent import IntentError, strategy_from_text as build
+
+    try:
+        return _call(build, svc, req.text, req.underlying, None, feed.get)
+    except IntentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/feed/pdf")
+def feed_pdf(underlying: str = "NIFTY", feed=Depends(get_feed)):
+    from .pdf import daily_report
+
+    f = _call(daily_feed, feed, underlying)
+    return Response(daily_report(f), media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{underlying}-options-daily-{f["date"]}.pdf"'})
+
+
+@app.post("/strategy/pdf")
+def strategy_pdf(req: StrategyPdfRequest):
+    from .pdf import strategy_report
+
+    try:
+        data = strategy_report(req.idea, req.context)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"not a strategy result: {exc}") from exc
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": 'attachment; filename="strategy.pdf"'})
 
 
 # ------------------------------------------------------------------ reader website and automatic daily send

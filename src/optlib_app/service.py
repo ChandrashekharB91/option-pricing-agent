@@ -298,12 +298,41 @@ class PricingService:
 
     # ------------------------------------------------------------------ risk (phase 2)
     def history(self) -> History:
+        """Index and India VIX closes; in live mode reloaded once a day (a hosted app runs for days)."""
         with self._lock:
-            if self._history is None:
+            today = datetime.now(IST).date()
+            if self._history is None or (self.mode == "live" and getattr(self, "_history_day", today) != today):
                 s = self.settings
                 self._history = (History.from_csv(s.history_path) if self.mode == "replay"
-                                 else load_history(s.cache_dir, end=datetime.now(IST).date()))
+                                 else load_history(s.cache_dir, end=today))
+                self._history_day = today
             return self._history
+
+    # desk statistics -------------------------------------------------------------------
+    def iv_stats(self, underlying: str = "NIFTY") -> dict:
+        """India VIX 1-year rank and percentile, with the series, and today's weekly ATM vol against it."""
+        from .marketstats import iv_rank
+
+        surf = self.surface(underlying, skip_today=True)
+        sm = surf.smiles[0]
+        out = iv_rank(self.history(), surf.as_of.date(), sm.slice.atm_vol())
+        out["atm_expiry"] = sm.slice.expiry
+        return _clean(out)
+
+    def open_interest(self, underlying: str = "NIFTY", expiry=None) -> dict:
+        """OI by strike for one expiry (strikes within 4 expected moves of the forward), PCR and max pain."""
+        from .marketstats import oi_profile
+
+        underlying = self._check_underlying(underlying)
+        exps = [e for e in self.expiries(underlying) if e > self.now().date()] or self.expiries(underlying)
+        exp = _to_date(expiry) if expiry else exps[0]
+        surf = self._surface_for(underlying, exp)
+        sm = self._smile(surf, exp)
+        sd = sm.forward * sm.slice.atm_vol() * math.sqrt(max(sm.time_to_expiry, 1e-6))
+        out = oi_profile(self.source().option_chain(underlying, exp), sm.forward, width_sd=4, sd=sd)
+        out.update(underlying=underlying, spot=surf.spot, expected_move=sd, as_of=surf.as_of,
+                   expiries=[e.isoformat() for e in exps])
+        return _clean(out)
 
     def eod_days(self) -> list[str]:
         """Trading days with end-of-day F&O data on hand (replay) for P&L explain."""
