@@ -56,6 +56,8 @@ Rules:
 9. Say clearly and first if the data looks unreliable: market closed or stale quotes, a FAIL or WARN check, an
    expiry or strike that does not exist, or an input that does not make sense. Do not paper over it.
 10. Structure longer answers with short headings and bullet points; keep it under about 350 words.
+11. Before writing the final answer, check that every part of the task has a tool result behind it. If a part is
+   missing, call the tool first (a straddle needs both the call and the put priced). Only then answer.
 """
 
 VALIDATOR_PROMPT = """You are an independent model validator for an option pricing system.
@@ -70,7 +72,9 @@ Check:
 
 Reply in at most 120 words, then a final line exactly of the form:
 VERDICT: PASS | WARN | FAIL
-Use FAIL if inputs do not match the question or a result must not be used; WARN for usable results with caveats."""
+Use FAIL only if tool inputs do not match the question (wrong underlying, expiry, strike, type, sign or size) or a
+result is internally inconsistent. Use WARN when something asked for is missing, data quality is weak (WARN or FAIL
+checks, stale quotes, an old curve) or results need caveats, and say what. PASS when complete and clean."""
 
 TOOLS = [
     {
@@ -449,7 +453,7 @@ def agent_llm(role: str = "orchestrator"):
         return primary
     # a small free tier (e.g. Groq: 8,000 tokens a minute) hands over to Gemini instead of waiting or failing
     if hasattr(primary, "max_retries"):
-        primary.max_retries = 0
+        primary.max_retries = 1  # one short wait for a per-minute limit, then hand over
     backup = insights_llm(get_setting)
     return FallbackLLM([primary] + list(getattr(backup, "clients", [backup])))
 
