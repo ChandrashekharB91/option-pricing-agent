@@ -62,6 +62,17 @@ def _call(fn, *args, **kwargs):
         raise HTTPException(status_code=503, detail=str(exc.args[0] if exc.args else exc)) from exc
 
 
+@app.exception_handler(Exception)
+async def _unexpected(request, exc: Exception):
+    """Any unexpected failure: log the traceback and tell the caller what went wrong, not just '500'."""
+    import logging
+
+    from fastapi.responses import JSONResponse
+
+    logging.getLogger("uvicorn.error").exception("unhandled error on %s", request.url.path)
+    return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {exc}"[:500]})
+
+
 class PriceRequest(BaseModel):
     underlying: str = "NIFTY"
     expiry: date
