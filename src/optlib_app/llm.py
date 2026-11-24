@@ -201,7 +201,10 @@ class OpenAICompatibleLLM:
             break
         if resp.status_code >= 400:
             try:
-                err = resp.json().get("error", {})
+                body_ = resp.json()
+                if isinstance(body_, list):  # Gemini's OpenAI-compatible endpoint returns [{"error": {...}}]
+                    body_ = body_[0] if body_ and isinstance(body_[0], dict) else {"error": str(body_)}
+                err = body_.get("error", body_) if isinstance(body_, dict) else body_
                 detail = err.get("message", str(err)) if isinstance(err, dict) else str(err)
             except ValueError:
                 detail = getattr(resp, "text", "")[:300]

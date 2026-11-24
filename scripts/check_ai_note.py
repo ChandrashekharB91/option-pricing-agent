@@ -25,6 +25,16 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8")
     key = get_setting("GEMINI_API_KEY", "")
     print(f"GEMINI_API_KEY: {'set (' + str(len(key)) + ' characters)' if key else 'not set'}")
+    if key:
+        shape = []
+        if any(ch.isspace() for ch in key):
+            shape.append("contains a space: remove it")
+        if "#" in key:
+            shape.append("contains '#': remove any comment after the key")
+        if key[:1] in "'\"" or key[-1:] in "'\"":
+            shape.append("has a stray quote")
+        print("  key format: " + ("; ".join(shape) if shape else
+                                  f"starts with {key[:4]!r}, no spaces or quotes"))
     try:
         llm = insights.insights_llm(get_setting)
     except LLMNotConfigured as exc:

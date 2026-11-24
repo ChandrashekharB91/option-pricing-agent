@@ -177,3 +177,23 @@ def test_grounding_reads_space_grouped_numbers():
     answer = "Total 10 623.715478 Rs, forward 22 513.88 pts, theta ‑1 212.12 Rs per day, 4 lots."
     assert ungrounded_numbers(answer, "", rec) == []
     assert ungrounded_numbers("Value 10 999.00 Rs", "", rec) == ["10999.00"]
+
+
+def test_gemini_list_shaped_error_is_readable():
+    """Gemini's OpenAI-compatible endpoint returns errors as a list: the message must still come through."""
+    from optlib_app.llm import LLMError, OpenAICompatibleLLM
+
+    class Resp:
+        status_code, headers = 400, {}
+
+        def json(self):
+            return [{"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.",
+                               "status": "INVALID_ARGUMENT"}}]
+
+    class Session:
+        def post(self, *a, **k):
+            return Resp()
+
+    llm = OpenAICompatibleLLM("gemini", "https://example.invalid", "m", "k", session=Session(), max_retries=0)
+    with pytest.raises(LLMError, match="API key not valid"):
+        llm.chat("s", [{"role": "user", "content": "hi"}])
