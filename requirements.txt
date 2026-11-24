@@ -1,2 +1,3 @@
-# Streamlit Community Cloud installs from this file: the project itself with the app extras.
-.[app]
+# Streamlit Community Cloud installs from this file. Editable (-e), so the app runs from the repository
+# folder and finds config/ and data/ there.
+-e .[app]

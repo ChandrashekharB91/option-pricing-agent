@@ -28,7 +28,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[2]
+from .config import ROOT  # noqa: E402
 FIX = ROOT / "tests" / "fixtures"
 GOLDEN = ROOT / "tests" / "regression" / "golden_phase1.json"
 CHANGELOG = ROOT / "tests" / "regression" / "CHANGELOG.md"

@@ -15,7 +15,18 @@ from pathlib import Path
 
 from optlib.data.env import read_env_file
 
-ROOT = Path(__file__).resolve().parents[2]
+def _project_root() -> Path:
+    """The repository folder (config/, data/, tests/fixtures). Normally two levels above this file; when the
+    package is installed into site-packages (a hosted deploy), fall back to the working directory, which is the
+    repository there."""
+    here = Path(__file__).resolve().parents[2]
+    if (here / "config").is_dir():
+        return here
+    cwd = Path.cwd()
+    return cwd if (cwd / "config").is_dir() else here
+
+
+ROOT = _project_root()
 FIX = ROOT / "tests" / "fixtures"
 
 
