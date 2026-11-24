@@ -206,3 +206,22 @@ def test_model_sees_compact_results_and_large_requests_fall_back(svc):
     assert f.chat("s", []).text == "ok" and f.model == "gemini-x"
     assert _RESTING.get("groq-x", 0) > 0  # skipped for a minute, then tried again
     _RESTING.clear()
+
+
+def test_calendar_arbitrage_elsewhere_does_not_withhold_this_price():
+    """Arbitrage between two later expiries is flagged (WARN) but does not withhold a price on another expiry."""
+    from optlib.surface import CalendarViolation
+
+    s = Settings()
+    s.snapshot_path = FIX4 = s.snapshot_path.parent / "upstox_live_nifty_4exp_20261029.json"
+    s.instruments_path = FIX4.parent / "upstox_instruments_20261029.json"
+    svc4 = PricingService(s)
+    surf = svc4.surface("NIFTY")
+    e = [sm.slice.expiry for sm in surf.smiles]
+    surf.calendar = [CalendarViolation((e[2], e[3]), 0.117, 1e-4)]
+    near = svc4.price("NIFTY", e[0], 23000, "call", 1)["validation"]
+    cal = next(c for c in near["checks"] if c["name"] == "calendar arbitrage")
+    assert cal["status"] == "WARN" and near["status"] != "FAIL"
+    far = svc4.price("NIFTY", e[3], 23000, "call", 1)["validation"]
+    assert next(c for c in far["checks"] if c["name"] == "calendar arbitrage")["status"] == "FAIL"
+    assert far["status"] == "FAIL"

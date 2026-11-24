@@ -25,7 +25,7 @@ from .config import get_setting
 from .llm import LLMClient, LLMError, LLMNotConfigured, make_llm
 from .service import PricingService, ServiceError
 
-MAX_TURNS = 8
+MAX_TURNS = 12
 
 ORCHESTRATOR_PROMPT = """You are the option pricing assistant for a quantitative analytics team.
 You price NSE index options (NIFTY, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50; European, cash-settled)

@@ -128,8 +128,17 @@ def validate(result: PricingResult, surface: VolSurface) -> ValidationReport:
         else:
             checks.append(Check("wing vs listed quotes", "PASS", "below every nearer listed offer"))
     if surface.calendar:
-        v = surface.calendar[0]
-        checks.append(Check("calendar arbitrage", "FAIL", f"{v.expiries[0]} vs {v.expiries[1]} at k={v.k:+.3f}"))
+        # only arbitrage that touches this option's own expiry (or the two it is interpolated between) affects it
+        exp = str(r.expiry)[:10]
+        mine = [v for v in surface.calendar
+                if exp in (str(v.expiries[0]), str(v.expiries[1])) or str(v.expiries[0]) < exp < str(v.expiries[1])]
+        v = (mine or surface.calendar)[0]
+        if mine:
+            checks.append(Check("calendar arbitrage", "FAIL", f"{v.expiries[0]} vs {v.expiries[1]} at k={v.k:+.3f}"))
+        else:
+            checks.append(Check("calendar arbitrage", "WARN",
+                                f"between {v.expiries[0]} and {v.expiries[1]} at k={v.k:+.3f}; not this expiry, so "
+                                "this price is unaffected"))
     elif len(surface.smiles) > 1:
         checks.append(Check("calendar arbitrage", "PASS", f"none across {len(surface.smiles)} expiries"))
 
