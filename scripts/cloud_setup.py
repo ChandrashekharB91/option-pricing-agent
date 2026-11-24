@@ -14,6 +14,7 @@ Nothing secret is printed.
 """
 import argparse
 import json
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -24,12 +25,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from optlib.data.env import read_env_file  # noqa: E402
-from optlib_app.d1 import D1Error, connect_from_settings  # noqa: E402
+from optlib_app.d1 import D1Error, NeedAccountId, connect_from_settings  # noqa: E402
 from optlib_app.subscribers import SubscriberStore  # noqa: E402
 
 LOCAL_ONLY = {"REPLAY_SNAPSHOT", "PRICING_API_URL", "FEED_PUBLIC_URL", "FEED_LINKS", "FEED_AUTO_SEND",
               "FEED_SEND_TIME", "EMBEDDED_API"}
 GH_SECRETS = ("UPSTOX_ANALYTICS_TOKEN", "SMTP_PASSWORD", "CLOUDFLARE_API_TOKEN")
+
+
+def set_env_line(key: str, value: str) -> None:
+    """Add or replace KEY=value in .env, keeping every other line."""
+    env_path = ROOT / ".env"
+    lines = env_path.read_text(encoding="utf-8-sig").splitlines() if env_path.exists() else []
+    lines = [ln for ln in lines if ln.split("=", 1)[0].strip() != key]
+    env_path.write_text("\n".join(lines + [f"{key}={value}"]) + "\n", encoding="utf-8")
 
 
 def migrate(local_db: Path, store: SubscriberStore) -> tuple[int, int]:
@@ -71,12 +80,30 @@ def main() -> int:
               "   (Create Token > Custom token > Permissions: Account / D1 / Edit), add the line\n"
               "   CLOUDFLARE_API_TOKEN=... to .env and run this again.")
         return 1
-    try:
-        conn = connect_from_settings(get)
-        store = SubscriberStore(ROOT / "data" / "feed" / "unused.db", remote=conn)
-    except D1Error as exc:
-        print(f"   {exc}")
-        return 1
+    for attempt in range(2):
+        try:
+            conn = connect_from_settings(get)
+            store = SubscriberStore(ROOT / "data" / "feed" / "unused.db", remote=conn)
+            break
+        except NeedAccountId:
+            if attempt:
+                return 1
+            print("   Cloudflare needs your account ID (the token is limited to D1, so it cannot look it up).\n"
+                  "   Open https://dash.cloudflare.com and copy the 32-character code in the address bar,\n"
+                  "   right after dash.cloudflare.com/  (example: dash.cloudflare.com/0123...cdef/home)")
+            acct = input("   Account ID: ").strip().strip("/")
+            acct = re.sub(r".*dash\.cloudflare\.com/", "", acct).split("/")[0]  # a pasted full address works too
+            if not re.fullmatch(r"[0-9a-f]{32}", acct):
+                print("   That is not a 32-character account ID; nothing changed. Run this again.")
+                return 1
+            set_env_line("D1_ACCOUNT_ID", acct)
+            env["D1_ACCOUNT_ID"] = acct
+            print("   saved D1_ACCOUNT_ID in .env")
+        except D1Error as exc:
+            print(f"   {exc}")
+            if "Authentication" in str(exc) or "9109" in str(exc) or "10000" in str(exc):
+                print("   The token is wrong or lacks D1 Edit: create it again (Account > D1 > Edit).")
+            return 1
     print(f"   connected: {store.counts()}")
 
     print("2. Subscriber list")
@@ -94,7 +121,7 @@ def main() -> int:
     print(f"   wrote {out} ({len(values)} settings)")
 
     print("4. GitHub Actions (the 09:30 daily email)")
-    variables = {"SMTP_USER": env.get("SMTP_USER", ""), "MAIL_FROM": env.get("MAIL_FROM", "") or env.get("SMTP_USER", ""),
+    variables = {"D1_ACCOUNT_ID": env.get("D1_ACCOUNT_ID", ""), "SMTP_USER": env.get("SMTP_USER", ""), "MAIL_FROM": env.get("MAIL_FROM", "") or env.get("SMTP_USER", ""),
                  "FEED_PUBLIC_URL": a.app_url.rstrip("/"), "FEED_SEND_TIME": env.get("FEED_SEND_TIME", "09:30")}
     missing = [k for k in GH_SECRETS if not env.get(k)]
     if missing:

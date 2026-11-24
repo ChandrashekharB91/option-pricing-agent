@@ -86,3 +86,16 @@ def test_cloud_setup_migrates_local_list(tmp_path):
     assert cs.migrate(tmp_path / "local.db", remote) == (0, 1)  # second run changes nothing
     moved = remote.get("me@example.com")
     assert moved.status == "active" and remote.authenticate("me@example.com", "secret123")  # password kept
+
+
+def test_d1_only_token_needs_account_id():
+    """A token limited to D1 cannot list accounts (Cloudflare returns none): ask for the ID, then it works."""
+    s = FakeD1Session()
+    s.get = lambda url, headers, params, timeout: FakeD1Session._Resp(
+        {"success": True, "result": []} if url.endswith("/accounts") else
+        {"success": True, "result": [{"name": "option-pricing-agent", "uuid": "db1"}]})
+    with pytest.raises(d1.NeedAccountId, match="32-character code"):
+        d1.connect_from_settings(lambda k, default="": {"CLOUDFLARE_API_TOKEN": "tok"}.get(k, default), session=s)
+    conn = d1.connect_from_settings(lambda k, default="": {"CLOUDFLARE_API_TOKEN": "tok",
+                                                          "D1_ACCOUNT_ID": "a" * 32}.get(k, default), session=s)
+    assert conn.url.endswith(f"/accounts/{'a' * 32}/d1/database/db1/query")

@@ -23,6 +23,14 @@ class D1Error(RuntimeError):
     pass
 
 
+class NeedAccountId(D1Error):
+    pass
+
+
+ACCOUNT_ID_HELP = ("D1_ACCOUNT_ID is needed. Find it at https://dash.cloudflare.com: it is the 32-character code in the "
+                   "address bar right after dash.cloudflare.com/ (also under Account home > ... > Copy account ID).")
+
+
 class _Cursor:
     def __init__(self, rows: list[dict], changes: int):
         self._rows = rows
@@ -87,10 +95,12 @@ def connect_from_settings(get: Callable[[str, str], str], session: Optional[requ
     session = session or requests.Session()
     account = get("D1_ACCOUNT_ID", "")
     if not account:
-        accounts = _get(session, f"{API}/accounts", token)
-        if len(accounts) != 1:
-            raise D1Error("set D1_ACCOUNT_ID: the API token can see "
-                          f"{len(accounts)} Cloudflare accounts" if accounts else "the API token sees no account")
+        try:
+            accounts = _get(session, f"{API}/accounts", token)
+        except D1Error:
+            accounts = []
+        if len(accounts) != 1:  # a token limited to D1 usually cannot list accounts
+            raise NeedAccountId(ACCOUNT_ID_HELP)
         account = accounts[0]["id"]
     db_id = get("D1_DATABASE_ID", "")
     if not db_id:

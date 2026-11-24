@@ -7,7 +7,7 @@
 #
 # Repository settings > Secrets and variables > Actions:
 #   secrets:   UPSTOX_ANALYTICS_TOKEN, SMTP_PASSWORD (Gmail app password), CLOUDFLARE_API_TOKEN (D1 edit)
-#   variables: SMTP_USER, MAIL_FROM (optional), FEED_PUBLIC_URL (the app's address, for email links),
+#   variables: D1_ACCOUNT_ID, SMTP_USER, MAIL_FROM (optional), FEED_PUBLIC_URL (the app's address, for email links),
 #              FEED_SEND_TIME (optional, HH:MM IST)
 # Run it by hand: Actions > Daily options email > Run workflow (optionally with a test address).
 # If a run fails, GitHub emails the repository owner.
@@ -45,6 +45,7 @@ jobs:
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
       MAIL_FROM: ${{ vars.MAIL_FROM || vars.SMTP_USER }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      D1_ACCOUNT_ID: ${{ vars.D1_ACCOUNT_ID }}
       D1_DATABASE_NAME: option-pricing-agent
       FEED_PUBLIC_URL: ${{ vars.FEED_PUBLIC_URL }}
       FEED_LINKS: app
@@ -63,7 +64,7 @@ jobs:
       - name: Check the settings
         run: |
           missing=""
-          for v in UPSTOX_ANALYTICS_TOKEN SMTP_USER SMTP_PASSWORD CLOUDFLARE_API_TOKEN; do
+          for v in UPSTOX_ANALYTICS_TOKEN SMTP_USER SMTP_PASSWORD CLOUDFLARE_API_TOKEN D1_ACCOUNT_ID; do
             [ -z "${!v}" ] && missing="$missing $v"
           done
           if [ -n "$missing" ]; then
