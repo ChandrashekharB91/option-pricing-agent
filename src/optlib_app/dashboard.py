@@ -124,6 +124,16 @@ with st.sidebar:
         st.caption(f"Agent LLM: {llm['provider']} · {llm['model']}" if llm.get("configured")
                    else "Agent LLM: not configured")
     underlying = st.selectbox("Underlying", underlyings, index=0)
+    if st.button("↻ Refresh data", width="stretch", help="Fetches the latest quotes (at most once a minute)"):
+        st.rerun()
+    if h.get("data_mode") == "live":
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        _now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        _open = _now.weekday() < 5 and (9, 15) <= (_now.hour, _now.minute) < (15, 30)
+        st.caption("Market open: quotes update every minute; press Refresh to see them." if _open else
+                   "Market closed: prices stay at the last quotes until 09:15 IST on the next trading day.")
     st.divider()
     st.caption("Market analytics for education and research. Not investment advice.")
 
