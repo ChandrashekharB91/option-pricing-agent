@@ -72,10 +72,11 @@ class Settings:
 
 def llm_status() -> dict:
     """What the agents will run on, without exposing the key."""
-    from .llm import LLMNotConfigured, make_llm
+    from .agent import agent_llm
+    from .llm import LLMNotConfigured
 
     try:
-        llm = make_llm(get_setting)
+        llm = agent_llm()
         return {"configured": True, "provider": llm.provider, "model": llm.model, "message": ""}
     except LLMNotConfigured as exc:
         return {"configured": False, "provider": get_setting("LLM_PROVIDER", "") or None, "model": None,

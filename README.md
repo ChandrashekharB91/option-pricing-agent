@@ -23,6 +23,8 @@ Phase 1 covers NSE index options (European, cash-settled), priced with Black-76 
 | AI market note (Gemini or the agent's model), checked number by number, in the app and the email | Done; needs `GEMINI_API_KEY` |
 | Plain-English strategy builder ("2 lakh, NIFTY to 24,500 by Friday, low risk") | Done |
 | PDF exports: daily market report and any strategy | Done |
+| AI analyst: plans its own tool calls for a task, live step list, checks panel, approve-to-send | Done |
+| Closing snapshot for after-hours use (15:20 IST capture) | Done |
 
 ## Run the app (local)
 
@@ -196,7 +198,22 @@ The output is `reports/backtest_report.html` and `reports/backtest_summary.json`
   strategy" under any inspected idea (legs, payoff, Greeks, outcomes under each view, costs, disclaimer). API:
   `GET /feed/pdf`, `POST /strategy/pdf`.
 
-API endpoints: `GET /stats/iv/{underlying}`, `GET /oi/{underlying}?expiry=`, `GET /news`,
+**AI analyst** (tab): give the agent a task in plain English (presets: morning desk brief, price and explain,
+strategy for my view, stress a short straddle). The agent plans the work itself, choosing among 13 tools (market
+overview, smile, pricing, book risk, scenarios, VaR/ES, P&L explain, strategies, projection, hedges, VIX regime, open
+interest, news), and the steps stream on screen as they run (`POST /agent/stream`, JSON lines). The answer is shown
+with its checks: data checks on every tool result, an independent validator's verdict, and whether every number was
+traced to a tool. You then approve the next step (email today's brief to yourself, or the PDF). Model: `LLM_PROVIDER`
+settings, or `GEMINI_API_KEY` with automatic fallback across Gemini models.
+
+**Closing snapshot** (live mode): after 15:30 IST, Upstox quotes thin out and an after-hours surface can fail its
+checks. The service records the raw Upstox responses it receives; between 15:20 and 15:30 IST it saves them as the
+day's closing snapshot (automatically while the app runs, or with **Save closing snapshot now** in the sidebar, for
+admins), and from 15:30 until 09:15 the next trading day it prices from that snapshot, labelled "closing snapshot".
+Snapshots live in `data/cache/closing/`; without one it falls back to live after-hours quotes.
+
+API endpoints: `GET /stats/iv/{underlying}`, `GET /oi/{underlying}?expiry=`, `GET /news`, `POST /agent/stream`,
+`POST /data/capture_close` (admin),
 `GET /insights/note/{underlying}` (cached one hour), `POST /strategy/from_text`.
 
 ## Running in the cloud (no laptop needed)

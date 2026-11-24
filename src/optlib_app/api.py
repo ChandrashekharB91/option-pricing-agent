@@ -35,9 +35,18 @@ async def _lifespan(_app):
         auto.start()
     except Exception as exc:  # noqa: BLE001 - the API must start even if the feed is misconfigured
         logging.getLogger("uvicorn.error").warning("feed: automatic send not started: %s", exc)
+    rec = None
+    try:
+        from .closing import CloseRecorder
+
+        rec = CloseRecorder(get_service()).start()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("uvicorn.error").warning("closing snapshot recorder not started: %s", exc)
     yield
     if auto:
         auto.stop()
+    if rec:
+        rec.stop()
 
 
 app = FastAPI(lifespan=_lifespan, title="Option Pricing Agent API", version="0.1.0",
@@ -265,6 +274,42 @@ def ask(req: AskRequest, svc: PricingService = Depends(get_service)):
     return _call(lambda: agent.ask(req.question, req.history).to_dict())
 
 
+@app.post("/agent/stream")
+def ask_stream(req: AskRequest, svc: PricingService = Depends(get_service)):
+    """The same agent run, streamed as JSON lines: each planning step and tool call as it happens, then the reply."""
+    import json as _json
+    import queue
+
+    from fastapi.responses import StreamingResponse
+
+    from .agent import AgentUnavailable, OptionPricingAgent
+
+    try:
+        agent = OptionPricingAgent(svc)
+    except AgentUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    events: "queue.Queue" = queue.Queue()
+
+    def work():
+        try:
+            reply = agent.ask(req.question, req.history, on_event=events.put)
+            events.put({"type": "reply", "reply": reply.to_dict()})
+        except Exception as exc:  # noqa: BLE001 - reported to the client as an event
+            events.put({"type": "error", "detail": f"{type(exc).__name__}: {exc}"})
+        events.put(None)
+
+    threading.Thread(target=work, daemon=True).start()
+
+    def lines():
+        while True:
+            e = events.get()
+            if e is None:
+                return
+            yield _json.dumps(e, default=str) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson")
+
+
 # ------------------------------------------------------------------ daily feed (email digest)
 _feed = None
 
@@ -386,7 +431,7 @@ def feed_send(req: SendRequest, feed=Depends(get_feed)):
     from .subscribers import SubscriptionError
 
     try:
-        return _call(feed.send, req.to, req.force)
+        return _call(feed.send, req.to, req.force, daily_feed(feed) if req.to else None)  # tests reuse the cached day
     except SubscriptionError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -417,6 +462,12 @@ def daily_feed(feed, underlying: str = "NIFTY") -> dict:
     with _daily_lock:
         _daily[underlying] = (time.time(), built, feed.svc)
     return built
+
+
+@app.post("/data/capture_close", dependencies=[Depends(require_admin)])
+def capture_close(svc: PricingService = Depends(get_service)):
+    """Save the current quotes as today's closing snapshot (normally automatic between 15:20 and 15:30 IST)."""
+    return _call(svc.capture_close)
 
 
 @app.get("/stats/iv/{underlying}")

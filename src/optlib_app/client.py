@@ -94,6 +94,23 @@ class PricingClient:
         return self._req("POST", "/strategy/hedge", json={"positions": positions, "budget": budget, "top": top,
                                                           "view": view or {"source": "model"}, "rank_by": rank_by})
 
+    def ask_stream(self, question: str, history: Optional[list] = None):
+        """Yield the agent's steps as they happen (dicts), ending with {"type": "reply", "reply": {...}}."""
+        import json
+
+        resp = self.session.post(f"{self.base_url}/agent/stream", json={"question": question,
+                                                                        "history": history or []},
+                                 timeout=self.timeout * 3, stream=True)
+        if resp.status_code >= 400:
+            try:
+                detail = resp.json().get("detail", resp.text)
+            except ValueError:
+                detail = resp.text
+            raise PricingAPIError(resp.status_code, str(detail))
+        for line in resp.iter_lines(decode_unicode=True):
+            if line:
+                yield json.loads(line)
+
     def ask(self, question: str, history: Optional[list] = None):
         return self._req("POST", "/agent/ask", json={"question": question, "history": history or []})
 
@@ -128,6 +145,9 @@ class PricingClient:
 
     def strategy_pdf(self, idea: dict, context: Optional[dict] = None) -> bytes:
         return self._bytes("POST", "/strategy/pdf", json={"idea": idea, "context": context or {}})
+
+    def capture_close(self, admin_key: str = ""):
+        return self._req("POST", "/data/capture_close", headers=self._admin(admin_key))
 
     # daily feed -------------------------------------------------------------
     def _admin(self, admin_key: str = "") -> dict:

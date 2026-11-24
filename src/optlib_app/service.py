@@ -96,6 +96,7 @@ class PricingService:
         self._surfaces: dict = {}
         self._history = None
         self._bhav: dict = {}
+        self._wall = lambda: datetime.now(IST)  # the real clock (tests replace it)
 
     # data ---------------------------------------------------------------------
     @property
@@ -104,14 +105,86 @@ class PricingService:
 
     def source(self):
         with self._lock:
+            if self.mode == "live":
+                closing = self._closing_source()
+                if closing is not None:
+                    return closing
             if self._source is None:
                 s = self.settings
                 if s.data_mode == "replay":
                     self._source, self._meta = snapshot_source(s.snapshot_path, s.instruments_path)
                 else:
-                    self._source = UpstoxSource.from_env(cache_dir=s.cache_dir)
+                    self._source = self._live_source()
                     self._meta = {}
             return self._source
+
+    def _live_source(self):
+        """Upstox, with its responses recorded so the closing snapshot can be saved."""
+        from .closing import RecordingSession
+
+        src = UpstoxSource.from_env(cache_dir=self.settings.cache_dir)
+        self._recorder = RecordingSession(src.client._session)
+        src.client._session = self._recorder
+        return src
+
+    # closing snapshot (live mode, after 15:30 IST) -------------------------------------
+    def _closing_source(self):
+        """The saved 15:20 snapshot while the market is closed, else None (live quotes)."""
+        from . import closing
+
+        path = closing.latest(self.settings.cache_dir, self._wall())
+        if path is None:
+            if getattr(self, "_closing_path", None) is not None:
+                self._closing_path = None
+                self._surfaces.clear()  # back to live quotes
+            return None
+        if getattr(self, "_closing_path", None) != path:
+            src, meta = snapshot_source(path, closing.instruments_path(path))
+            self._closing_src, self._closing_meta, self._closing_path = src, meta, path
+            self._surfaces.clear()
+        return self._closing_src
+
+    def data_note(self) -> str:
+        """How the current numbers were sourced, for the header and the agent."""
+        if self.mode == "replay":
+            return "recorded snapshot (replay)"
+        with self._lock:
+            if self._closing_source() is not None:
+                t = datetime.fromisoformat(self._closing_meta["as_of"]).astimezone(IST)
+                return f"closing snapshot {t:%d %b %H:%M} IST (market closed)"
+        from .closing import market_open
+
+        return "live quotes" if market_open(self._wall()) else "live quotes (market closed: may be stale)"
+
+    def capture_close(self, underlyings: Optional[list] = None) -> dict:
+        """Fetch fresh quotes for the surfaces and save them as today's closing snapshot."""
+        from . import closing
+
+        if self.mode != "live":
+            raise ServiceError("the closing snapshot is for live mode")
+        underlyings = [self._check_underlying(u) for u in (underlyings or ["NIFTY"])]
+        with self._lock:
+            if self._source is None:
+                self._source, self._meta = self._live_source(), {}
+            live = self._source
+            saved_path, self._closing_path = getattr(self, "_closing_path", None), None
+        done = []
+        for u in underlyings:
+            listed = live.expiries(u)
+            sets = [listed[:4]]
+            if listed and listed[0] <= self._wall().date():  # expiry day: the email's view skips today's contract
+                sets.append(listed[1:5])
+            for exps in sets:
+                build_surface(live, self.curve(self._wall().date()), u, expiries=exps)
+            live.futures(u)
+            done.append(u)
+        as_of = self._wall()
+        path = closing.save(self.settings.cache_dir, as_of, self._recorder.records(),
+                            closing.instrument_records(live.instruments, done), done)
+        with self._lock:
+            self._closing_path = saved_path
+        return {"saved": str(path.name), "as_of": as_of.isoformat(), "underlyings": done,
+                "responses": len(self._recorder.records())}
 
     def fbil(self):
         with self._lock:
@@ -143,7 +216,10 @@ class PricingService:
         if self.mode == "replay":
             self.source()
             return datetime.fromisoformat(self._meta["as_of"])
-        return datetime.now(IST)
+        with self._lock:
+            if self._closing_source() is not None:
+                return datetime.fromisoformat(self._closing_meta["as_of"])
+        return self._wall()
 
     def surface(self, underlying: str, max_expiries: int = 4, skip_today: bool = False) -> VolSurface:
         """skip_today leaves out a contract that expires today (on expiry day its last hours of time value make
@@ -151,8 +227,9 @@ class PricingService:
         underlying = self._check_underlying(underlying)
         key = (underlying, max_expiries, skip_today)
         with self._lock:
-            hit = self._surfaces.get(key)
-            fresh = hit and (self.mode == "replay" or time.time() - hit[0] < self.settings.surface_ttl_seconds)
+            fixed = self.mode == "replay" or (self.mode == "live" and self._closing_source() is not None)
+            hit = self._surfaces.get(key)  # after the check above, which clears the cache when the source switches
+            fresh = hit and (fixed or time.time() - hit[0] < self.settings.surface_ttl_seconds)
             if fresh:
                 return hit[1]
             exps = self.expiries(underlying)
@@ -187,7 +264,7 @@ class PricingService:
         from .config import llm_status
 
         return {"status": "ok", "data_mode": self.mode, "as_of": self.now().isoformat(),
-                "underlyings": list(UNDERLYINGS), "llm": llm_status()}
+                "data_note": self.data_note(), "underlyings": list(UNDERLYINGS), "llm": llm_status()}
 
     def overview(self, underlying: str = "NIFTY") -> dict:
         surf = self.surface(underlying)
@@ -195,6 +272,7 @@ class PricingService:
         c = surf.curve
         return _clean({
             "underlying": surf.underlying, "as_of": surf.as_of, "spot": surf.spot, "data_mode": self.mode,
+            "data_note": self.data_note(),
             "lot_size": self.lot_size(surf.underlying), "surface_status": surf.status,
             "curve": {"label": c.label, "age_days": c.age_days(),
                       "pillars": {t: {"maturity": d, "discount_factor": df, "zero_rate": c.zero_rate(c.time(d))}

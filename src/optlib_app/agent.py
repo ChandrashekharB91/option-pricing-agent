@@ -50,6 +50,12 @@ Rules:
    and chance of profit >= threshold) and must be labelled as not recommended, with the reasons. Say plainly
    when nothing is recommended. Ask for the
    capital amount if the user has not given one. End with the disclaimer from the tool result, word for word.
+8. For a broad task (e.g. "prepare today's desk brief"), plan it yourself: decide which tools you need, call
+   independent tools together, and stop when you have what the task asks for. Use volatility_regime for where
+   implied vol sits in its 1-year range, open_interest for positioning, market_news for the day's themes.
+9. Say clearly and first if the data looks unreliable: market closed or stale quotes, a FAIL or WARN check, an
+   expiry or strike that does not exist, or an input that does not make sense. Do not paper over it.
+10. Structure longer answers with short headings and bullet points; keep it under about 350 words.
 """
 
 VALIDATOR_PROMPT = """You are an independent model validator for an option pricing system.
@@ -189,6 +195,29 @@ TOOLS += [
                                              "description": "default worst_case: protect both directions"}},
             "required": ["positions", "budget"]},
     },
+    {
+        "name": "volatility_regime",
+        "description": "India VIX now, its 1-year low/high/mean, rank and percentile, the day's change, and the nearest "
+                       "weekly ATM implied vol compared with VIX. Use it to say whether options are cheap or dear "
+                       "relative to the past year.",
+        "input_schema": {"type": "object", "properties": {
+            "underlying": {"type": "string", "description": "e.g. NIFTY"}}, "required": ["underlying"]},
+    },
+    {
+        "name": "open_interest",
+        "description": "Open interest for one expiry (default the nearest weekly): put/call OI ratio and its change, "
+                       "total call and put OI and their change on the day, max pain, the strikes with the largest call "
+                       "and put OI, and the expected move.",
+        "input_schema": {"type": "object", "properties": {
+            "underlying": {"type": "string"}, "expiry": {"type": "string", "description": "YYYY-MM-DD, optional"}},
+            "required": ["underlying"]},
+    },
+    {
+        "name": "market_news",
+        "description": "Today's most relevant Indian market headlines (title, source, time), for context only. "
+                       "Headlines are not data: never take numbers from them.",
+        "input_schema": {"type": "object", "properties": {"limit": {"type": "integer", "description": "1 to 10"}}},
+    },
 ]
 STRATEGY_TOOLS = ("recommend_strategies", "project_strategy", "find_hedge")
 
@@ -201,6 +230,36 @@ def _idea(i: dict, source: str) -> dict:
             "unlimited_loss": i["unlimited_loss"], "stress_loss_3sd": i["stress_loss"],
             "breakevens": i["breakevens"], "chosen_view": i["views"][source], "market_view": i["views"]["market"],
             "greeks": i["greeks"], "why_this_strategy": (i.get("rationale") or {}).get("text", "")}
+
+
+def _summary(name: str, out) -> str:
+    """One line per tool result for the live step list."""
+    if not isinstance(out, dict):
+        return ""
+    try:
+        if name == "market_overview":
+            return (f"spot {out['spot']:,.2f} · {len(out['expiries'])} expiries · surface {out['surface_status']}")
+        if name == "price_option":
+            return (f"{out['strike']:,.0f} {out['option_type']} {out['expiry']}: {out['price_per_unit']:,.2f} at vol "
+                    f"{out['vol']:.2%} · checks {out['validation']['status']}")
+        if name == "volatility_regime":
+            return f"India VIX {out['vix']:.2%} · 1-year rank {out['rank']:.0%} ({out['label']})" if out.get(
+                "available") else "VIX history unavailable"
+        if name == "open_interest":
+            return (f"{out['expiry']}: put/call {out['pcr']:.2f} · max pain {out['max_pain']:,.0f}"
+                    if out.get("pcr") else out.get("expiry", ""))
+        if name == "market_news":
+            return f"{len(out['headlines'])} headlines"
+        if name == "get_smile":
+            return f"{out['expiry']}: ATM vol {out['atm_vol']:.2%} · forward {out['forward']:,.0f}"
+        if name == "recommend_strategies":
+            return (f"{out['considered']} strategies priced · {len(out['recommended'])} recommended for "
+                    f"Rs {out['capital']:,.0f}")
+        if name in ("book_risk", "risk_summary", "pnl_explain"):
+            return f"status {out.get('status', 'PASS')}"
+    except (KeyError, TypeError, ValueError):
+        return ""
+    return ""
 
 
 class AgentUnavailable(Exception):
@@ -321,13 +380,25 @@ def ungrounded_numbers(answer: str, question: str, records: list["ToolRecord"]) 
 
 # ------------------------------------------------------------------ agent
 
+def agent_llm(role: str = "orchestrator"):
+    """The configured LLM (LLM_PROVIDER ...); if none is set but GEMINI_API_KEY is, Gemini with model fallback."""
+    try:
+        return make_llm(get_setting, role)
+    except LLMNotConfigured:
+        if not get_setting("GEMINI_API_KEY", ""):
+            raise
+        from .insights import insights_llm
+
+        return insights_llm(get_setting)
+
+
 class OptionPricingAgent:
     def __init__(self, service: PricingService, llm: Optional[LLMClient] = None,
                  validator_llm: Optional[LLMClient] = None, max_turns: int = MAX_TURNS):
         self.service = service
         try:
-            self.llm = llm or make_llm(get_setting, "orchestrator")
-            self.validator_llm = validator_llm or (make_llm(get_setting, "validator") if llm is None else llm)
+            self.llm = llm or agent_llm("orchestrator")
+            self.validator_llm = validator_llm or (agent_llm("validator") if llm is None else llm)
         except LLMNotConfigured as exc:
             raise AgentUnavailable(str(exc)) from exc
         self.max_turns = max_turns
@@ -403,6 +474,18 @@ class OptionPricingAgent:
             hedges = [{k: v for k, v in x.items() if k not in ("curve_after", "hedge")} for x in r["hedges"]]
             return {k: r[k] for k in ("as_of", "expiry", "view", "budget", "rank_label", "before", "note",
                                       "disclaimer")} | {"hedges": hedges}
+        if name == "volatility_regime":
+            r = svc.iv_stats(args.get("underlying", "NIFTY"))
+            return {k: v for k, v in r.items() if k not in ("series", "dates")}
+        if name == "open_interest":
+            r = svc.open_interest(args.get("underlying", "NIFTY"), args.get("expiry"))
+            return {k: v for k, v in r.items() if k != "rows"}
+        if name == "market_news":
+            from .news import headlines
+
+            n = max(1, min(int(args.get("limit", 6)), 10))
+            return {"headlines": [{"title": h["title"], "source": h["source"], "published": h.get("published")}
+                                  for h in headlines(n, get=get_setting)]}
         if name == "scenario_grid":
             return svc.scenarios(args["positions"], args.get("spot_shocks"), args.get("vol_shocks"))
         raise ServiceError(f"unknown tool {name}")
@@ -420,20 +503,26 @@ class OptionPricingAgent:
         return out
 
     # main loop ---------------------------------------------------------------------------
-    def ask(self, question: str, history: Optional[list] = None) -> AgentReply:
+    def ask(self, question: str, history: Optional[list] = None, on_event=None) -> AgentReply:
+        """Plan with the tools, answer, then validate. ``on_event(dict)`` sees each step as it happens."""
+        emit = on_event or (lambda e: None)
         messages = [{"role": m["role"], "content": m["content"]} for m in (history or [])
                     if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
         messages.append({"role": "user", "content": question})
         records: list[ToolRecord] = []
         answer = ""
         try:
-            for _ in range(self.max_turns):
-                reply = self.llm.chat(ORCHESTRATOR_PROMPT, messages, TOOLS)
+            for turn in range(self.max_turns):
+                emit({"type": "thinking", "turn": turn + 1})
+                reply = self.llm.chat(ORCHESTRATOR_PROMPT, messages, TOOLS, max_tokens=8192)
                 messages.append({"role": "assistant", "content": reply.text, "tool_calls": reply.tool_calls})
                 if not reply.tool_calls:
                     answer = reply.text
                     break
+                emit({"type": "plan", "turn": turn + 1, "tools": [tc.name for tc in reply.tool_calls],
+                      "model": getattr(self.llm, "model", "")})
                 for tc in reply.tool_calls:
+                    emit({"type": "tool_start", "name": tc.name, "input": dict(tc.arguments)})
                     if tc.parse_error:
                         out, err = None, tc.parse_error
                     else:
@@ -442,11 +531,16 @@ class OptionPricingAgent:
                         except (ServiceError, KeyError, ValueError, TypeError) as exc:
                             out, err = None, str(exc)
                     records.append(ToolRecord(tc.name, dict(tc.arguments), out, err))
+                    st_ = (self._statuses([records[-1]]) or [None])[0]
+                    emit({"type": "tool_done", "name": tc.name, "input": dict(tc.arguments), "error": err,
+                          "status": "FAIL" if err else (st_ or "OK"), "summary": _summary(tc.name, out)})
                     messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.name,
                                      "content": json.dumps(out) if err is None else err, "is_error": err is not None})
             else:
                 answer = "I could not finish within the step limit; please narrow the request."
+            emit({"type": "validating"})
             review, verdict = self._validate(question, records)
+            emit({"type": "validated", "verdict": verdict})
         except LLMError as exc:
             return AgentReply(question=question, answer=f"The LLM API failed: {exc}", status="FAIL", released=False,
                               validator_review="", validator_verdict="", deterministic_status="",
@@ -486,7 +580,7 @@ class OptionPricingAgent:
             return "No tool calls were made, so there is nothing to validate.", "PASS"
         payload = {"question": question, "tool_calls": [asdict(r) for r in records]}
         reply = self.validator_llm.chat(VALIDATOR_PROMPT, [{"role": "user", "content": json.dumps(payload, default=str)}],
-                                        tools=None, max_tokens=600)
+                                        tools=None, max_tokens=4096)
         m = re.search(r"VERDICT:\s*\**\s*(PASS|WARN|FAIL)", reply.text, re.IGNORECASE)
         verdict = m.group(1).upper() if m else "WARN"  # an unparseable review is not a clean pass
         review = re.sub(r"\n?\**VERDICT:.*$", "", reply.text, flags=re.S | re.IGNORECASE).strip()

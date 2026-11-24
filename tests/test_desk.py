@@ -124,3 +124,57 @@ def test_pdfs(client):
     p = client.post("/strategy/pdf", json={"idea": one, "context": {"text": "2 lakh", "view_source": "user"}})
     assert p.status_code == 200 and p.content[:5] == b"%PDF-"
     assert client.post("/strategy/pdf", json={"idea": {"x": 1}}).status_code == 400
+
+
+# ------------------------------------------------------------------ the agent plans a brief with the new tools
+
+def test_agent_brief_tools_and_events(svc):
+    from optlib_app.agent import OptionPricingAgent, VALIDATOR_PROMPT
+    from optlib_app.llm import LLMReply, ToolCall
+
+    class Scripted:
+        provider, model = "scripted", "m"
+
+        def __init__(self):
+            self.turns = [LLMReply("", [ToolCall("a", "volatility_regime", {"underlying": "NIFTY"}),
+                                        ToolCall("b", "open_interest", {"underlying": "NIFTY"}),
+                                        ToolCall("c", "market_news", {"limit": 3})])]
+
+        def chat(self, system, messages, tools=None, max_tokens=0):
+            if system == VALIDATOR_PROMPT:
+                return LLMReply("Consistent.\nVERDICT: PASS")
+            if self.turns:
+                return self.turns.pop(0)
+            out = [m for m in messages if m["role"] == "tool"]
+            import json
+            r = json.loads(out[0]["content"])
+            return LLMReply(f"India VIX is {r['vix'] * 100:.2f}.")
+
+    events = []
+    reply = OptionPricingAgent(svc, llm=Scripted()).ask("Prepare the desk brief", on_event=events.append)
+    names = [r["name"] for r in reply.tool_calls]
+    assert names == ["volatility_regime", "open_interest", "market_news"] and all(
+        r["error"] is None for r in reply.tool_calls)
+    assert "series" not in reply.tool_calls[0]["output"] and "rows" not in reply.tool_calls[1]["output"]
+    kinds = [e["type"] for e in events]
+    assert kinds[:2] == ["thinking", "plan"] and kinds.count("tool_done") == 3 and kinds[-1] == "validated"
+    assert "India VIX" in next(e["summary"] for e in events if e["type"] == "tool_done" and e["name"] == "volatility_regime")
+    assert reply.status == "PASS" and not reply.ungrounded_numbers
+
+
+def test_agent_stream_endpoint(client, monkeypatch):
+    from optlib_app import agent as agent_mod
+    from optlib_app.llm import LLMReply
+
+    class Say:
+        provider, model = "scripted", "m"
+
+        def chat(self, *a, **k):
+            return LLMReply("Nothing to compute.\nVERDICT: PASS")
+
+    monkeypatch.setattr(agent_mod, "agent_llm", lambda role="orchestrator": Say())
+    r = client.post("/agent/stream", json={"question": "hello there"})
+    import json
+    lines = [json.loads(x) for x in r.text.splitlines() if x]
+    assert lines[0]["type"] == "thinking" and lines[-1]["type"] == "reply"
+    assert lines[-1]["reply"]["answer"].startswith("Nothing")

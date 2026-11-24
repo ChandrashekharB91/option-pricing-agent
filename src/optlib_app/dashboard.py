@@ -127,13 +127,21 @@ with st.sidebar:
     if st.button("↻ Refresh data", width="stretch", help="Fetches the latest quotes (at most once a minute)"):
         st.rerun()
     if h.get("data_mode") == "live":
-        from datetime import datetime
-        from zoneinfo import ZoneInfo
-
-        _now = datetime.now(ZoneInfo("Asia/Kolkata"))
-        _open = _now.weekday() < 5 and (9, 15) <= (_now.hour, _now.minute) < (15, 30)
-        st.caption("Market open: quotes update every minute; press Refresh to see them." if _open else
-                   "Market closed: prices stay at the last quotes until 09:15 IST on the next trading day.")
+        _note = h.get("data_note", "")
+        if _note.startswith("closing snapshot"):
+            st.caption(f"Market closed: using the {_note.split(' (')[0]}, saved just before the close so every "
+                       "check runs on clean quotes. Live quotes resume at 09:15 IST.")
+        elif _note == "live quotes":
+            st.caption("Market open: quotes update every minute; press Refresh to see them.")
+        else:
+            st.caption("Market closed: quotes after 15:30 IST can be stale until 09:15 IST on the next trading day.")
+        if IS_ADMIN and st.button("Save closing snapshot now", width="stretch",
+                                  help="Normally automatic between 15:20 and 15:30 IST while the app is running"):
+            try:
+                r = client.capture_close(get_setting("FEED_ADMIN_KEY", ""))
+                st.success(f"Saved {r['responses']} market responses at {r['as_of'][11:16]} IST.")
+            except PricingAPIError as exc:
+                show_error(exc)
     st.divider()
     st.caption("Market analytics for education and research. Not investment advice.")
 
@@ -150,7 +158,7 @@ lot = ov["lot_size"]
 as_of_txt = pd.Timestamp(ov.get("as_of") or h["as_of"]).strftime("%a %d %b %Y, %H:%M IST")
 e_near = expiry_rows[0]
 ui.hero(f"{underlying} options desk", f"{ov['spot']:,.2f}",
-        f"Market data as of {as_of_txt} · {h['data_mode']} data · lot size {lot}",
+        f"Market data as of {as_of_txt} · {ov.get('data_note') or h['data_mode'] + ' data'} · lot size {lot}",
         [f"Surface {ov['surface_status']}", f"ATM vol {e_near['atm_vol']:.2%} ({e_near['expiry']})",
          f"{len(expiry_rows)} expiries fitted", f"Curve {ov['curve']['label'].replace('MIBOR-OIS ', '')} · "
          f"{ov['curve']['age_days']} days old"])
@@ -193,6 +201,20 @@ def oi_chart(o: dict, title: str) -> go.Figure:
 
 # ------------------------------------------------------------------ overview
 with tab_over:
+    with st.expander("About this agent: the problem, what it does, the impact", expanded=False):
+        a1, a2, a3 = st.columns(3, gap="medium")
+        with a1:
+            ui.card("The problem", "Every morning a quant pulls the NSE option chain, cleans bad quotes, fits the "
+                    "volatility smile, prices and checks reference options, reads open interest and the news, and "
+                    "writes the desk note. By hand that is slow, error-prone and different each time.")
+        with a2:
+            ui.card("What the agent does", "Live Upstox data → quote checks → arbitrage-free SVI smile → Black-76 "
+                    "prices and Greeks (QuantLib-matched) → VIX regime, open interest, news → strategy ideas, risk "
+                    "and a validated AI note → a 09:30 email to every subscriber, with no laptop running.")
+        with a3:
+            ui.card("Impact", get_setting("IMPACT_NOTE", "The morning brief that took an analyst about 45–60 minutes "
+                    "now runs in under 2 minutes, every trading day, with 5,330 regression checks and a validator "
+                    "on every number. Anyone at DPA can sign up and use it; the code is documented and tested."))
     try:
         ivs = client.iv_stats(underlying)
     except PricingAPIError as exc:
@@ -901,40 +923,160 @@ with tab_strat:
     st.warning(f"**Disclaimer.** {meta['disclaimer']} Margins are estimates; confirm with the broker before trading.")
 
 # ------------------------------------------------------------------ agent
+MISSIONS = {
+    "Morning desk brief": (
+        "Prepare today's NIFTY options desk brief. Check the market data first and say if anything is unreliable. "
+        "Then cover: where implied volatility sits against the past year and against realised vol, the expected "
+        "move to the nearest weekly expiry, positioning from open interest, the price and Greeks of 1 lot of the "
+        "at-the-money straddle on that expiry, and the main news themes. Finish with strategy ideas for Rs 2 lakh "
+        "if I expect NIFTY to stay in a range until that expiry."),
+    "Price and explain": ("Price 2 lots of the nearest weekly at-the-money call and put, explain the Greeks in plain "
+                          "words, and say how reliable each price is."),
+    "Strategy for my view": ("I have Rs 3 lakh and expect NIFTY to rise about 1.5% by the nearest weekly expiry. "
+                             "Find suitable strategies, compare the top two, and tell me the main risks."),
+    "Stress a short straddle": ("I am short 2 lots of the nearest weekly at-the-money straddle. Show the book's "
+                                "Greeks, its 1-day VaR and expected shortfall, the worst stress scenarios, and the "
+                                "cheapest hedge within Rs 50,000."),
+}
+STEP_ICON = {"market_overview": "🛰️", "get_smile": "📈", "price_option": "🧮", "book_risk": "📊", "scenario_grid": "🧊",
+             "risk_summary": "🛡️", "pnl_explain": "🧾", "recommend_strategies": "🧪", "project_strategy": "📐",
+             "find_hedge": "🪝", "volatility_regime": "🌡️", "open_interest": "🧱", "market_news": "📰"}
+
+
+def show_reply(reply: dict, seconds: float | None = None):
+    """The agent's answer with its checks: what was verified before it was shown."""
+    st.markdown(reply["answer"])
+    calls = reply.get("tool_calls") or []
+    k = st.columns(5)
+    k[0].metric("Steps chosen", len(calls), help="Tool calls the agent decided to make")
+    k[1].metric("Data checks", reply.get("deterministic_status") or "n/a",
+                help="Chain QA, smile fit and the price validator on every number the tools returned")
+    k[2].metric("Validator", reply.get("validator_verdict") or "n/a",
+                help="A separate model call that sees only the request and the tool results, not this answer")
+    loose = reply.get("ungrounded_numbers") or []
+    k[3].metric("Numbers traced", "all" if not loose else f"{len(loose)} not found",
+                help="Every number in the answer is matched to a tool result")
+    k[4].metric("Time", f"{seconds:.0f} s" if seconds else "n/a", f"{reply.get('model', '')}", delta_color="off",
+                delta_arrow="off")
+    if loose:
+        st.warning("Numbers not found in any tool result (treat with care): " + ", ".join(loose))
+    if not reply.get("released", True):
+        st.error("The answer was withheld because a check failed. See the validator review.")
+    with st.expander("Independent validator review"):
+        st.write(reply.get("validator_review") or "")
+    with st.expander(f"Tool calls and raw results ({len(calls)})"):
+        st.json(calls, expanded=False)
+
+
 with tab_agent:
     if not (IS_ADMIN or AGENT_FOR_ALL):  # the agent runs on the owner's LLM key
-        st.info("The AI agent is available to administrators for now.")
+        st.info("The AI analyst is available to administrators for now.")
     else:
-        st.caption("Ask in plain language, e.g. *Price 2 lots of the 22,500 call and explain the Greeks*. "
-                   "Every number comes from the pricing tools; an independent validator reviews each answer.")
-        if not (h.get("llm") or {}).get("configured"):
-            st.info("The agent needs an LLM. In the repo's `.env` set `LLM_PROVIDER` (e.g. groq, gemini, openrouter, "
-                    "ollama, anthropic), `LLM_API_KEY` and `LLM_MODEL`, restart the API, then check it with "
-                    "`python scripts/check_llm.py`.\n\n" + (h.get("llm") or {}).get("message", ""))
+        llm_ok = (h.get("llm") or {}).get("configured")
+        if not llm_ok:
+            st.info("The analyst needs a language model: set `GEMINI_API_KEY` (or `LLM_PROVIDER`, `LLM_API_KEY`, "
+                    "`LLM_MODEL`) in the app's secrets.\n\n" + (h.get("llm") or {}).get("message", ""))
+        with st.container(border=True):
+            st.markdown('<div class="opa-kicker">Give the analyst a task</div>', unsafe_allow_html=True)
+            st.caption("Describe the job in plain English. The agent decides which tools to use and in what order "
+                       "(market data, smile, pricing, Greeks, VIX regime, open interest, news, strategies, risk), runs "
+                       "them, and writes the answer. Every number comes from a tool, every number in the answer is "
+                       "traced back, and an independent validator reviews the work before you see it.")
+            m1, m2 = st.columns([1, 3])
+            preset = m1.radio("Task", list(MISSIONS), key="mission_preset", label_visibility="collapsed")
+            mission = m2.text_area("Task for the analyst", value=MISSIONS[preset], height=150, key=f"mission_{preset}",
+                                   label_visibility="collapsed")
+            go_ = st.button("▶  Run the analyst", type="primary", disabled=not llm_ok, key="mission_go")
+        if go_ and mission.strip():
+            import time as _time
+
+            t0 = _time.time()
+            final = None
+            with st.status("The analyst is working…", expanded=True) as box:
+                try:
+                    for ev in client.ask_stream(mission.strip()):
+                        kind = ev.get("type")
+                        if kind == "thinking":
+                            box.update(label=f"The analyst is planning (round {ev['turn']})…")
+                        elif kind == "plan":
+                            st.markdown(f"**Round {ev['turn']} · decided to call:** "
+                                        + ", ".join(f"`{x}`" for x in ev["tools"]))
+                        elif kind == "tool_done":
+                            mark = "❌" if ev.get("error") else ("⚠️" if ev.get("status") in ("WARN", "FAIL") else "✅")
+                            args = ", ".join(f"{a}={v}" for a, v in (ev.get("input") or {}).items()
+                                             if not isinstance(v, (list, dict)))
+                            st.markdown(f"{mark} {STEP_ICON.get(ev['name'], '🔧')} **{ev['name']}**"
+                                        + (f" ({args})" if args else "")
+                                        + (f" · {ev['summary']}" if ev.get("summary") else "")
+                                        + (f" · {ev['status']}" if ev.get("status") not in ("OK", None) else "")
+                                        + (f" · error: {ev['error']}" if ev.get("error") else ""))
+                        elif kind == "validating":
+                            box.update(label="Independent validator is reviewing the work…")
+                            st.markdown("🔎 **Independent validator** reviewing the tool results…")
+                        elif kind == "validated":
+                            st.markdown(f"🔎 Validator verdict: **{ev['verdict']}**")
+                        elif kind == "error":
+                            st.error(ev["detail"])
+                        elif kind == "reply":
+                            final = ev["reply"]
+                    secs = _time.time() - t0
+                    if final:
+                        box.update(label=f"Done in {secs:.0f} s · {len(final.get('tool_calls') or [])} steps · "
+                                         f"status {final['status']}",
+                                   state="complete" if final["status"] != "FAIL" else "error", expanded=True)
+                        st.session_state["mission_result"] = (mission.strip(), final, secs)
+                    else:
+                        box.update(label="The analyst stopped without an answer", state="error")
+                except PricingAPIError as exc:
+                    box.update(label="The analyst could not run", state="error")
+                    show_error(exc)
+        res = st.session_state.get("mission_result")
+        if res:
+            task, reply, secs = res
+            st.markdown("#### The analyst's answer")
+            with st.container(border=True):
+                show_reply(reply, secs)
+            st.caption("Market analytics for education and research. Not investment advice.")
+            st.markdown("##### Next steps (you approve)")
+            a1, a2, a3 = st.columns(3)
+            if a1.button("Approve: email today's brief to me", key="mission_mail", width="stretch"):
+                try:
+                    st.success(client.feed_send([USER["email"]], admin_key=get_setting("FEED_ADMIN_KEY", ""))["message"])
+                except PricingAPIError as exc:
+                    show_error(exc)
+            if a2.button("Prepare today's report (PDF)", key="mission_pdf", width="stretch"):
+                try:
+                    with st.spinner("Building the PDF…"):
+                        st.session_state["daily_pdf"] = client.daily_pdf(underlying)
+                except PricingAPIError as exc:
+                    show_error(exc)
+            if st.session_state.get("daily_pdf"):
+                a3.download_button("⬇ Download the report", st.session_state["daily_pdf"],
+                                   file_name=f"{underlying}-options-daily.pdf", mime="application/pdf",
+                                   width="stretch", key="mission_pdf_dl")
+
+        st.markdown("#### Follow-up questions")
         st.session_state.setdefault("chat", [])
         for m in st.session_state.chat:
             with st.chat_message(m["role"]):
                 st.markdown(m["content"])
-        question = st.chat_input("Ask about a price, Greeks, the smile or the book")
+        question = st.chat_input("Ask a follow-up, e.g. 'what if vol rises 2 points?'")
         if question:
             st.session_state.chat.append({"role": "user", "content": question})
             with st.chat_message("user"):
                 st.markdown(question)
             with st.chat_message("assistant"):
-                with st.spinner("Pricing and validating..."):
+                with st.spinner("Working and validating..."):
                     try:
                         history = st.session_state.chat[:-1]
+                        if res and not history:
+                            history = [{"role": "user", "content": res[0]},
+                                       {"role": "assistant", "content": res[1]["answer"]}]
+                        import time as _time
+
+                        t0 = _time.time()
                         reply = client.ask(question, history)
-                        st.markdown(reply["answer"])
-                        st.markdown(f"Status {badge(reply['status'])} · validator: {reply['validator_verdict']} · "
-                                    f"{reply.get('provider', '')} {reply.get('model', '')}")
-                        if reply.get("ungrounded_numbers"):
-                            st.warning("Numbers not found in any tool result (treat with care): "
-                                       + ", ".join(reply["ungrounded_numbers"]))
-                        with st.expander("Independent validator review"):
-                            st.write(reply["validator_review"])
-                        with st.expander(f"Tool calls ({len(reply['tool_calls'])})"):
-                            st.json(reply["tool_calls"], expanded=False)
+                        show_reply(reply, _time.time() - t0)
                         st.session_state.chat.append({"role": "assistant", "content": reply["answer"]})
                     except PricingAPIError as exc:
                         show_error(exc)
@@ -944,13 +1086,14 @@ with tab_feed:
     left, right = st.columns([2, 3], gap="large")
     with left:
         ui.card("NIFTY options daily, by email",
-                "One email after each trading day with the numbers on this dashboard: ATM implied vol and its daily "
+                "One email every trading morning (09:30 IST) with the numbers on this dashboard: ATM implied vol and its daily "
                 "change, skew (25-delta risk reversal and butterfly), the expected move to each expiry, "
-                "market-implied odds, reference prices with Greeks, open interest, futures basis and rates, and the "
-                "data-quality checks behind them. Market information only, no trade ideas.")
+                "market-implied odds, reference prices with Greeks, open interest, futures basis and rates, an AI-written "
+                "market note, the day's headlines, and the data-quality checks behind them. Market information "
+                "only, no trade ideas.")
         st.write("")
         on_now = bool(USER.get("daily"))
-        state = ("✅ **Subscribed.** The email goes to **{}** after each trading day (about 15:20 IST)."
+        state = ("✅ **Subscribed.** The email goes to **{}** every trading morning at 09:30 IST."
                  if on_now else "**Not subscribed.** Switch it on below to get the email at **{}**.")
         st.markdown(state.format(USER["email"]))
         on = st.toggle("Send me the daily email", value=on_now, disabled=not USER.get("verified"),
