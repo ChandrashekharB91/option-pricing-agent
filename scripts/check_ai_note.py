@@ -40,11 +40,12 @@ def main() -> int:
     except LLMNotConfigured as exc:
         print(f"No model for the note: {exc}")
         return 1
-    print(f"Model: {getattr(llm, 'provider', '?')} · {getattr(llm, 'model', '?')}")
+    print(f"Model: {getattr(llm, 'provider', '?')} · "
+          f"{' -> '.join(getattr(llm, 'models', [getattr(llm, 'model', '?')]))} (next one used if busy)")
     try:
         reply = llm.chat("Reply with the single word OK.", [{"role": "user", "content": "ping"}], tools=None,
                          max_tokens=insights.MAX_TOKENS)
-        print(f"Connection: OK (model replied {reply.text[:40]!r})")
+        print(f"Connection: OK via {getattr(llm, 'model', '?')} (replied {reply.text[:40]!r})")
     except Exception as exc:  # noqa: BLE001
         print(f"Connection FAILED: {exc}")
         return 1

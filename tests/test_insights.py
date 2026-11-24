@@ -67,3 +67,32 @@ def test_news_parse_rank_and_dedupe():
                          fetch=lambda url: rss, max_age_hours=1e9)
     assert [o["title"] for o in out] == ["Nifty, Sensex fall as FIIs sell; India VIX jumps", "Celebrity buys a new car"]
     assert out[0]["source"] == "Test" and out[0]["relevance"] > out[1]["relevance"]
+
+
+def test_gemini_falls_back_when_busy():
+    from optlib_app.insights import FallbackLLM
+    from optlib_app.llm import LLMError, LLMReply
+
+    class Busy:
+        model = "a"
+
+        def chat(self, *a, **k):
+            raise LLMError("gemini HTTP 503: high demand")
+
+    class Ok:
+        model = "b"
+
+        def chat(self, *a, **k):
+            return LLMReply(text="fine")
+
+    class Bad:
+        model = "c"
+
+        def chat(self, *a, **k):
+            raise LLMError("gemini HTTP 400: API key not valid")
+
+    f = FallbackLLM([Busy(), Ok()])
+    assert f.chat("s", []).text == "fine" and f.model == "b"
+    import pytest
+    with pytest.raises(LLMError, match="400"):  # a real error is not hidden by trying other models
+        FallbackLLM([Bad(), Ok()]).chat("s", [])

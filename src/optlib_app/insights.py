@@ -42,10 +42,47 @@ def insights_llm(get: Callable[[str, str], str]):
                    "LLM_MODEL": "INSIGHTS_MODEL", "LLM_BASE_URL": "INSIGHTS_BASE_URL"}
         return make_llm(lambda k, d="": get(mapping[k], d) if k in mapping else get(k, d), "insights")
     if get("GEMINI_API_KEY", ""):
-        gem = {"LLM_PROVIDER": "gemini", "LLM_API_KEY": get("GEMINI_API_KEY", ""),
-               "LLM_MODEL": get("GEMINI_MODEL", "") or DEFAULT_MODELS["gemini"], "LLM_BASE_URL": ""}
-        return make_llm(lambda k, d="": gem.get(k, d) if k in gem else get(k, d), "insights")
+        models = [m.strip() for m in (get("GEMINI_MODEL", "") or "").split(",") if m.strip()]
+        models += [m for m in GEMINI_FALLBACKS if m not in models]
+        clients = []
+        for m in models:
+            gem = {"LLM_PROVIDER": "gemini", "LLM_API_KEY": get("GEMINI_API_KEY", ""), "LLM_MODEL": m,
+                   "LLM_BASE_URL": ""}
+            clients.append(make_llm(lambda k, d="", gem=gem: gem.get(k, d) if k in gem else get(k, d), "insights"))
+        return FallbackLLM(clients)
     return make_llm(get, "insights")
+
+
+# when a Gemini model is busy (503), rate-limited (429) or unavailable (404), the next one is tried
+GEMINI_FALLBACKS = [DEFAULT_MODELS["gemini"], "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+_BUSY = ("HTTP 503", "HTTP 429", "HTTP 404", "HTTP 500", "HTTP 502", "HTTP 504", "cannot reach")
+
+
+class FallbackLLM:
+    """Try each model in turn when one is busy or unavailable; ``model`` names the one that answered."""
+
+    def __init__(self, clients: list):
+        self.clients = clients
+        self.provider = getattr(clients[0], "provider", "")
+        self.model = getattr(clients[0], "model", "")
+
+    @property
+    def models(self) -> list[str]:
+        return [getattr(c, "model", "") for c in self.clients]
+
+    def chat(self, system, messages, tools=None, max_tokens=2048):
+        last = None
+        for c in self.clients:
+            try:
+                reply = c.chat(system, messages, tools=tools, max_tokens=max_tokens)
+                self.model = getattr(c, "model", self.model)
+                return reply
+            except LLMError as exc:
+                last = exc
+                if not any(b in str(exc) for b in _BUSY):
+                    raise
+                log.warning("Gemini %s unavailable (%s); trying the next model", getattr(c, "model", "?"), exc)
+        raise last
 
 
 def facts(feed: dict) -> dict:
