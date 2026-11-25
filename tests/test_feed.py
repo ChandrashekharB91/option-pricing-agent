@@ -347,3 +347,18 @@ def test_expiry_day_leaves_out_todays_contract(monkeypatch):
     assert [e["expiry"] for e in f["expiries"]] == ["2026-11-09", "2026-11-17", "2026-11-23"]
     assert f["highlights"][0].startswith("Expiry day: the 03 Nov contract settles today")
     assert len(svc.surface("NIFTY").smiles) == 4  # the dashboard still shows today's contract
+
+
+def test_backup_run_stops_before_building_when_already_sent(tmp_path, monkeypatch):
+    """A second scheduled start on the same day returns at once, without fetching data or calling the AI model."""
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    from optlib_app.feed_jobs import FeedJobs
+
+    jobs = FeedJobs(None, tmp_path, get=lambda k, d="": d)
+    today = _dt.datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+    monkeypatch.setattr(jobs, "sent_today", lambda day: day == today)
+    monkeypatch.setattr(jobs, "build", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not build")))
+    r = jobs.send()
+    assert r["skipped"] and r["sent"] == 0

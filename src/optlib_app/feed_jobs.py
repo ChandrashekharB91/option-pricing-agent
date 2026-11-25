@@ -178,8 +178,16 @@ class FeedJobs:
     def send(self, to: Optional[list[str]] = None, force: bool = False, feed: Optional[dict] = None) -> dict:
         """Send today's feed. ``to`` = test addresses (sent without needing a subscription); otherwise every
         active subscriber, once per day unless ``force``."""
-        feed = feed or self.build()
         test = bool(to)
+        if feed is None and not test and not force:  # a backup run: stop before building (saves the AI-note quota)
+            import datetime as _dt
+            from zoneinfo import ZoneInfo
+
+            today = _dt.datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+            if self.sent_today(today):
+                return {"date": today, "kind": "daily", "sent": 0, "failed": 0, "skipped": True,
+                        "message": f"the {today} feed was already sent (use force to send again)"}
+        feed = feed or self.build()
         if not test and self.sent_today(feed["date"]) and not force:
             return {"date": feed["date"], "kind": "daily", "sent": 0, "failed": 0, "skipped": True,
                     "message": f"the {feed['date']} feed was already sent (use force to send again)"}
