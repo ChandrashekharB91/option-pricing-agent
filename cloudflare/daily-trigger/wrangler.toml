@@ -1,0 +1,8 @@
+# Optional: deploy with Wrangler instead of the dashboard (npx wrangler deploy, from this folder).
+# Then: npx wrangler secret put GITHUB_TOKEN   (and optionally RUN_KEY)
+name = "nifty-daily-trigger"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+
+[triggers]
+crons = ["55 3 * * 1-5"]  # 03:55 UTC = 09:25 IST, Monday-Friday

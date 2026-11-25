@@ -216,6 +216,25 @@ API endpoints: `GET /stats/iv/{underlying}`, `GET /oi/{underlying}?expiry=`, `GE
 `POST /data/capture_close` (admin),
 `GET /insights/note/{underlying}` (cached one hour), `POST /strategy/from_text`.
 
+## On-time daily email: Cloudflare Worker trigger
+
+GitHub's scheduled runs can start late or be skipped (on 24 Nov the 09:15 run started at 19:48; on 25 Nov it never
+started). Runs started through GitHub's API begin within seconds, so a Cloudflare Worker
+(`cloudflare/daily-trigger/worker.js`) starts the "Daily options email" workflow at **09:25 IST** on weekdays; the job
+waits until 09:30 and sends. The GitHub schedule (09:07, 09:22, 09:37 IST) stays as a backup, and the "already sent
+today" check means nobody receives two emails.
+
+Set up once (Cloudflare dashboard, about 10 minutes):
+1. GitHub > Settings > Developer settings > Fine-grained tokens > Generate: repository `option-pricing-agent` only,
+   permission **Actions: Read and write**. Copy the token.
+2. Cloudflare > Workers & Pages > Create > Worker > name `nifty-daily-trigger` > Deploy > Edit code: paste
+   `worker.js` > Deploy.
+3. The Worker > Settings > Variables and secrets: add secret `GITHUB_TOKEN` (the token); optionally secret `RUN_KEY`
+   (any password) to start a run by opening `https://<worker-address>/run?key=<RUN_KEY>`.
+4. The Worker > Settings > Trigger events > Add > Cron trigger: `55 3 * * 1-5` (UTC = 09:25 IST, Mon-Fri).
+
+Or with Wrangler, from `cloudflare/daily-trigger/`: `npx wrangler deploy`, then `npx wrangler secret put GITHUB_TOKEN`.
+
 ## Running in the cloud (no laptop needed)
 
 | Part | Where it runs | What it does |

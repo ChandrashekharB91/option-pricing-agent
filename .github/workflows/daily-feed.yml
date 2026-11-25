@@ -9,6 +9,8 @@
 #   secrets:   UPSTOX_ANALYTICS_TOKEN, SMTP_PASSWORD (Gmail app password), CLOUDFLARE_API_TOKEN (D1 edit)
 #   variables: D1_ACCOUNT_ID, SMTP_USER, MAIL_FROM (optional), MAIL_FROM_NAME (sender name, optional), FEED_PUBLIC_URL (the app's address, for email links),
 #              FEED_SEND_TIME (optional, HH:MM IST)
+# On-time start: the Cloudflare Worker in cloudflare/daily-trigger/ starts this workflow through the API at 09:25 IST
+# (API-started runs begin within seconds; GitHub's own schedule below is the backup).
 # Run it by hand: Actions > Daily options email > Run workflow (optionally with a test address).
 # If a run fails, GitHub emails the repository owner.
 name: Daily options email
