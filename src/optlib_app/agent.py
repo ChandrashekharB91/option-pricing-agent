@@ -36,6 +36,10 @@ Rules:
    conversation. Never compute, estimate, add up or invent figures yourself; if a total is needed, call a tool
    that returns it (book_risk returns totals).
 2. If the trade is ambiguous (missing expiry, strike, call/put or size), ask one short question instead of guessing.
+   These are NOT ambiguous: "ATM" or "at-the-money" means the strike on the exchange grid nearest the forward (NIFTY:
+   multiples of 50), for both legs of a straddle; "nearest weekly expiry" means the first expiry in market_overview
+   that is not expiring today. price_option prices any grid strike, listed or not, calls and puts alike: the smile
+   quotes show only out-of-the-money options by design, so a missing quote is never a reason to ask.
    Lots are signed: positive long, negative short. Quote sizes in lots and state the lot size from the tools.
 3. Use market_overview first when you need the available expiries, spot, forward or rates.
 4. Report every validation status. If a result has WARN checks, say what they mean in plain words.
@@ -280,8 +284,8 @@ def for_llm(name: str, out):
         o["not_recommended"] = [slim(i) for i in o.get("not_recommended", [])[:2]]
         o["views"] = {k: {kk: vv for kk, vv in v.items() if kk in ("mean", "p5", "p95")}
                       for k, v in (o.get("views") or {}).items()}
-    elif name == "get_smile":
-        o["quotes"] = o.get("quotes", [])[::2]
+    elif name == "get_smile":  # keep every strike; drop only the bid/ask vols
+        o["quotes"] = [{k: v for k, v in q.items() if k not in ("iv_bid", "iv_ask")} for q in o.get("quotes", [])]
     elif name == "find_hedge":
         o["hedges"] = o.get("hedges", [])[:2]
     return walk(o)
@@ -384,8 +388,8 @@ def _join_space_groups(text: str) -> str:
 
 def _numbers(text: str) -> list[tuple[str, float, int]]:
     """(raw, value, decimals) for each number in text, ignoring dates and years."""
-    text = _DATE.sub(" ", text)
-    text = _join_space_groups(text.replace("\u2011", "-").replace("\u2212", "-"))
+    text = text.replace("\u2011", "-").replace("\u2010", "-").replace("\u2013", "-").replace("\u2212", "-")
+    text = _join_space_groups(_DATE.sub(" ", text))  # unicode hyphens first, so "2026‑12‑01" is seen as a date
     out = []
     for m in _NUM.finditer(text):
         raw = m.group(0)

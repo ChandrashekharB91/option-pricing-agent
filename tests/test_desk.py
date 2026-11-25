@@ -225,3 +225,9 @@ def test_calendar_arbitrage_elsewhere_does_not_withhold_this_price():
     far = svc4.price("NIFTY", e[3], 23000, "call", 1)["validation"]
     assert next(c for c in far["checks"] if c["name"] == "calendar arbitrage")["status"] == "FAIL"
     assert far["status"] == "FAIL"
+
+
+def test_dates_with_unicode_hyphens_are_not_numbers():
+    from optlib_app.agent import ungrounded_numbers
+
+    assert ungrounded_numbers("the 2026‑12‑01 expiry", "", []) == []
