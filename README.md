@@ -231,7 +231,7 @@ Set up once (Cloudflare dashboard, about 10 minutes):
    `worker.js` > Deploy.
 3. The Worker > Settings > Variables and secrets: add secret `GITHUB_TOKEN` (the token); optionally secret `RUN_KEY`
    (any password) to start a run by opening `https://<worker-address>/run?key=<RUN_KEY>`.
-4. The Worker > Settings > Trigger events > Add > Cron trigger: `55 3 * * 1-5` (UTC = 09:25 IST, Mon-Fri).
+4. The Worker > Settings > Trigger events > Add > Cron trigger: `55 3 * * MON-FRI` (UTC = 09:25 IST, Mon-Fri).
 
 Or with Wrangler, from `cloudflare/daily-trigger/`: `npx wrangler deploy`, then `npx wrangler secret put GITHUB_TOKEN`.
 

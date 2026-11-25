@@ -5,4 +5,4 @@ main = "worker.js"
 compatibility_date = "2026-11-01"
 
 [triggers]
-crons = ["55 3 * * 1-5"]  # 03:55 UTC = 09:25 IST, Monday-Friday
+crons = ["55 3 * * MON-FRI"]  # 03:55 UTC = 09:25 IST, Monday-Friday

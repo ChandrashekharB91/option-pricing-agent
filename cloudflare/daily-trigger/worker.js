@@ -9,7 +9,7 @@
 //   GITHUB_TOKEN  (secret)  fine-grained token: this repository only, permission "Actions: Read and write"
 //   RUN_KEY       (secret, optional)  lets you start a run by opening  https://<worker>/run?key=<RUN_KEY>
 //   GITHUB_REPO   (text, optional)    default ChandrashekharB91/option-pricing-agent
-// Trigger: Settings > Trigger events > Cron: 55 3 * * 1-5
+// Trigger: Settings > Trigger events > Cron: 55 3 * * MON-FRI
 
 const WORKFLOW = "daily-feed.yml";
 
